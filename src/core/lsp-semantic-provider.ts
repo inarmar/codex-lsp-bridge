@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { LspClient, ServerProcessConfig } from "./json-rpc-lsp-client.js";
 import { lspSeverityToText } from "./diagnostics.js";
-import type { Diagnostic, DiagnosticOptions, DiagnosticReport, DocumentPosition, HoverInfo, Location, Position, SemanticProvider, SymbolMatch } from "./types.js";
+import type { Diagnostic, DiagnosticOptions, DiagnosticReport, DocumentPosition, HoverInfo, Location, Position, RenameSummary, SemanticProvider, SymbolMatch } from "./types.js";
 import {
   applyWorkspaceEdit as applyEdit,
   normalizeWorkspaceEdit,
@@ -34,6 +34,11 @@ interface LspSymbol {
 
 interface LspHover {
   contents: string | { value: string } | Array<string | { value: string }>;
+}
+
+interface LspPrepareRename {
+  range: { start: Position; end: Position };
+  placeholder?: string;
 }
 
 const defaultDiagnosticsTimeoutMs = 15000;
@@ -207,6 +212,58 @@ export class LspSemanticProvider implements SemanticProvider {
       character: position.character,
       contents: normalizeHoverContents(result.contents)
     };
+  }
+
+  async rename(position: DocumentPosition, newName: string): Promise<RenameSummary> {
+    if (newName.trim().length === 0) throw new Error("New name is required");
+    const document = await this.openOrUpdateDocument(filePathToUri(position.file));
+    const lspPosition = toLspPosition(position);
+
+    const oldName = await this.prepareRename(document.uri, lspPosition);
+
+    const edit = await this.client.request<unknown | null>("textDocument/rename", {
+      textDocument: { uri: document.uri },
+      position: lspPosition,
+      newName
+    });
+    if (!edit) throw new Error(`The language server cannot rename the symbol at ${formatPosition(position)}`);
+
+    const result = await this.applyWorkspaceEdit(edit);
+    if (!result.applied) {
+      throw new Error(result.failure ?? "Applying the rename edit failed");
+    }
+
+    return {
+      ...(oldName !== undefined ? { oldName } : {}),
+      newName,
+      changedFiles: result.changedFiles,
+      createdFiles: result.createdFiles,
+      renamedFiles: result.renamedFiles,
+      deletedFiles: result.deletedFiles,
+      editCount: result.textEditCount
+    };
+  }
+
+  /** Returns the placeholder for the symbol under the cursor, or undefined when the server has no prepareRename. */
+  private async prepareRename(uri: string, lspPosition: Position): Promise<string | undefined> {
+    let prepare: LspPrepareRename | null;
+    try {
+      prepare = await this.client.request<LspPrepareRename | null>("textDocument/prepareRename", {
+        textDocument: { uri },
+        position: lspPosition
+      });
+    } catch {
+      return undefined; // prepareRename is optional — fall back to a direct rename request
+    }
+    if (!prepare) {
+      throw new Error("The cursor is not on a renameable symbol");
+    }
+
+    const range = "range" in prepare ? prepare.range : prepare;
+    if (!rangeContains(range, lspPosition)) {
+      throw new Error("The cursor is not on a renameable symbol");
+    }
+    return "placeholder" in prepare && typeof prepare.placeholder === "string" ? prepare.placeholder : undefined;
   }
 
   async dispose(): Promise<void> {
@@ -547,6 +604,13 @@ function toLspPosition(position: DocumentPosition): Position {
     line: position.line - 1,
     character: position.character - 1
   };
+}
+
+function rangeContains(range: { start: Position; end: Position }, position: Position): boolean {
+  if (position.line < range.start.line || position.line > range.end.line) return false;
+  if (position.line === range.start.line && position.character < range.start.character) return false;
+  if (position.line === range.end.line && position.character > range.end.character) return false;
+  return true;
 }
 
 function formatPosition(position: DocumentPosition): string {

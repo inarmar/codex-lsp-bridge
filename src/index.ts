@@ -158,6 +158,14 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(await service.hover(requireValue(command, value)), null, 2));
       return;
     }
+    if (command === "rename") {
+      const position = readPosition(args);
+      if (!position) throw new Error("rename requires --file, --line, and --character");
+      const newName = readOption(args, "--new-name");
+      if (!newName) throw new Error("rename requires --new-name");
+      console.log(JSON.stringify(await service.rename(position, newName), null, 2));
+      return;
+    }
 
     printUsage("stderr", registry.languages());
     process.exitCode = 1;
@@ -225,6 +233,7 @@ function printUsage(stream: "stdout" | "stderr", languages: string[]): void {
   codex-lsp-bridge symbols <query> ${languageOptions} [--root path]
   codex-lsp-bridge hover <symbol> ${languageOptions} [--root path]
   codex-lsp-bridge hover --file path --line n --character n ${languageOptions} [--root path]
+  codex-lsp-bridge rename --file path --line n --character n --new-name name ${languageOptions} [--root path]
   codex-lsp-bridge mcp [--root path] ${languageOptions}`;
   if (stream === "stdout") {
     console.log(usage);

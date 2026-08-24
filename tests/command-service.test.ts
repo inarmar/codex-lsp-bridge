@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CommandService, WorkspaceCommandService } from "../src/core/command-service.js";
-import type { DiagnosticReport, HoverInfo, Location, SemanticProvider, SymbolMatch } from "../src/core/types.js";
+import type { DiagnosticReport, HoverInfo, Location, RenameSummary, SemanticProvider, SymbolMatch } from "../src/core/types.js";
 import { filePathToUri } from "../src/utils/uri.js";
 
 class FakeProvider implements SemanticProvider {
@@ -50,6 +50,17 @@ class FakeProvider implements SemanticProvider {
 
   hoverAt(): Promise<HoverInfo> {
     return Promise.resolve({ file: "src/position.ts", line: 2, character: 3, contents: "position hover" });
+  }
+
+  rename(_position: { file: string; line: number; character: number }, newName: string): Promise<RenameSummary> {
+    return Promise.resolve({
+      newName,
+      changedFiles: ["src/editor.ts"],
+      createdFiles: [],
+      renamedFiles: [],
+      deletedFiles: [],
+      editCount: 1
+    });
   }
 
   dispose(): Promise<void> {

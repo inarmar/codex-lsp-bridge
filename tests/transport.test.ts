@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { dispatch, handleJsonRpcLine, handleRequest } from "../src/transport/mcp.js";
 import { CommandService } from "../src/core/command-service.js";
-import type { DiagnosticReport, HoverInfo, Location, SemanticProvider, SymbolMatch } from "../src/core/types.js";
+import type { DiagnosticReport, HoverInfo, Location, RenameSummary, SemanticProvider, SymbolMatch } from "../src/core/types.js";
 
 class EmptyProvider implements SemanticProvider {
   constructor(private readonly label = "default") {}
@@ -47,6 +47,16 @@ class EmptyProvider implements SemanticProvider {
   }
   hoverAt(): Promise<HoverInfo> {
     return Promise.resolve({ file: "src/position.ts", line: 2, character: 3, contents: "position hover" });
+  }
+  rename(_position: { file: string; line: number; character: number }, newName: string): Promise<RenameSummary> {
+    return Promise.resolve({
+      newName,
+      changedFiles: ["src/a.ts"],
+      createdFiles: [],
+      renamedFiles: [],
+      deletedFiles: [],
+      editCount: 1
+    });
   }
   dispose(): Promise<void> {
     return Promise.resolve();

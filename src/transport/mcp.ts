@@ -145,6 +145,28 @@ const tools = [
     }
   },
   {
+    name: "lsp_rename",
+    description: "Rename a symbol across the workspace. The language server computes every occurrence and the bridge validates and applies the edit; never apply the returned edit manually. Follow up with lsp_diagnostics.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        file: { type: "string", description: "File containing the symbol occurrence." },
+        line: { type: "number", description: "1-based line of the symbol." },
+        character: { type: "number", description: "1-based character of the symbol." },
+        new_name: { type: "string", description: "New name for the symbol." },
+        root: { type: "string", description: "Optional workspace root for detached worktrees." }
+      },
+      required: ["file", "line", "character", "new_name"],
+      additionalProperties: false
+    }
+  },
+  {
     name: "lsp_status",
     description: "Return codex-lsp-bridge status, language server availability, Codex install state, and build freshness.",
     annotations: {
@@ -308,6 +330,9 @@ async function callTool(service: LspCommandService, params: Record<string, unkno
   if (name === "lsp_references") return dispatchLspMethod(scopedService, "lsp.references", args);
   if (name === "lsp_symbols") return dispatchLspMethod(scopedService, "lsp.symbols", args);
   if (name === "lsp_hover") return dispatchLspMethod(scopedService, "lsp.hover", args);
+  if (name === "lsp_rename") {
+    return scopedService.rename(readRequiredPosition(args), readStringParam(args, "new_name"));
+  }
   if (name === "lsp_status") return runtime.status ? runtime.status() : { status: "unavailable" };
 
   throw new JsonRpcError(-32601, `Unsupported tool: ${name}`);
@@ -334,6 +359,17 @@ function readOptionalPositiveNumber(params: Record<string, unknown>, key: string
 
 function readOptionalPosition(params: Record<string, unknown>): { file: string; line: number; character: number } | undefined {
   if (params.file === undefined && params.line === undefined && params.character === undefined) return undefined;
+  if (typeof params.file !== "string") throw new JsonRpcError(-32602, "file parameter is required");
+  if (typeof params.line !== "number") throw new JsonRpcError(-32602, "line parameter is required");
+  if (typeof params.character !== "number") throw new JsonRpcError(-32602, "character parameter is required");
+  return {
+    file: params.file,
+    line: params.line,
+    character: params.character
+  };
+}
+
+function readRequiredPosition(params: Record<string, unknown>): { file: string; line: number; character: number } {
   if (typeof params.file !== "string") throw new JsonRpcError(-32602, "file parameter is required");
   if (typeof params.line !== "number") throw new JsonRpcError(-32602, "line parameter is required");
   if (typeof params.character !== "number") throw new JsonRpcError(-32602, "character parameter is required");

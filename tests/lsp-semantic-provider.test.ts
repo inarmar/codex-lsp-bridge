@@ -17,6 +17,9 @@ class FakeClient extends EventEmitter implements LspClient {
   definitionResult: unknown = null;
   referencesResult: unknown[] = [];
   hoverResult: unknown = null;
+  prepareRenameResult: unknown = { range: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } }, placeholder: "Editor" };
+  prepareRenameUnsupported = false;
+  renameResult: unknown = null;
   stopped = false;
   onNotify?: (method: string, params?: unknown) => void;
 
@@ -28,6 +31,11 @@ class FakeClient extends EventEmitter implements LspClient {
     if (method === "textDocument/definition") return Promise.resolve(this.definitionResult as T);
     if (method === "textDocument/references") return Promise.resolve(this.referencesResult as T);
     if (method === "textDocument/hover") return Promise.resolve(this.hoverResult as T);
+    if (method === "textDocument/prepareRename") {
+      if (this.prepareRenameUnsupported) return Promise.reject(new Error("method not found"));
+      return Promise.resolve(this.prepareRenameResult as T);
+    }
+    if (method === "textDocument/rename") return Promise.resolve(this.renameResult as T);
     return Promise.resolve({} as T);
   }
 
@@ -326,6 +334,39 @@ describe("LspSemanticProvider", () => {
       { id: 8, result: null },
       { id: 9, result: null }
     ]);
+  });
+
+  it("renames a symbol through prepareRename, rename, and WorkspaceEdit", async () => {
+    const provider = createProvider();
+    const uri = filePathToUri(await fs.realpath(filePath));
+    client.renameResult = {
+      changes: {
+        [uri]: [
+          {
+            range: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } },
+            newText: "Renamed"
+          }
+        ]
+      }
+    };
+
+    const result = await provider.rename({ file: filePath, line: 1, character: 14 }, "Renamed");
+
+    expect(result).toMatchObject({ oldName: "Editor", newName: "Renamed", editCount: 1, changedFiles: [await fs.realpath(filePath)] });
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("export const Renamed = 1;\n");
+    expect(client.requests.map(({ method }) => method)).toContain("textDocument/prepareRename");
+    expect(client.requests.map(({ method }) => method)).toContain("textDocument/rename");
+  });
+
+  it("falls back to rename when prepareRename is unsupported", async () => {
+    const provider = createProvider();
+    client.prepareRenameUnsupported = true;
+    client.renameResult = { changes: {} };
+
+    await expect(provider.rename({ file: filePath, line: 1, character: 14 }, "Renamed")).resolves.toMatchObject({
+      newName: "Renamed",
+      editCount: 0
+    });
   });
 
   it("applies server-pushed workspace/applyEdit through the pipeline and syncs open documents", async () => {

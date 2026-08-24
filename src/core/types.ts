@@ -62,6 +62,16 @@ export interface HoverInfo {
   contents: string;
 }
 
+export interface RenameSummary {
+  oldName?: string;
+  newName: string;
+  changedFiles: string[];
+  createdFiles: string[];
+  renamedFiles: Array<{ from: string; to: string }>;
+  deletedFiles: string[];
+  editCount: number;
+}
+
 export interface SemanticProvider {
   diagnostics(uri?: string, options?: DiagnosticOptions): Promise<DiagnosticReport>;
   definition(symbol: string): Promise<Location>;
@@ -71,6 +81,7 @@ export interface SemanticProvider {
   symbols(query: string): Promise<SymbolMatch[]>;
   hover(symbol: string): Promise<HoverInfo>;
   hoverAt(position: DocumentPosition): Promise<HoverInfo>;
+  rename(position: DocumentPosition, newName: string): Promise<RenameSummary>;
   dispose(): Promise<void>;
 }
 

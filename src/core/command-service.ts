@@ -1,5 +1,5 @@
 import { summarizeDiagnostics } from "./diagnostics.js";
-import type { DiagnosticOptions, DiagnosticSummary, DocumentPosition, HoverInfo, Location, SemanticProvider, SymbolMatch } from "./types.js";
+import type { DiagnosticOptions, DiagnosticSummary, DocumentPosition, HoverInfo, Location, RenameSummary, SemanticProvider, SymbolMatch } from "./types.js";
 import { uriToFilePath } from "../utils/uri.js";
 import type { SupportedLanguage } from "../adapters/language-registry.js";
 
@@ -49,6 +49,12 @@ export class CommandService {
     assertPosition(position);
     return this.provider.hoverAt(position);
   }
+
+  async rename(position: DocumentPosition, newName: string): Promise<RenameSummary> {
+    assertPosition(position);
+    assertNonEmpty("newName", newName);
+    return this.provider.rename(position, newName);
+  }
 }
 
 export class WorkspaceCommandService {
@@ -88,6 +94,10 @@ export class WorkspaceCommandService {
 
   async hoverAt(position: DocumentPosition): Promise<HoverInfo> {
     return this.forFile(position.file).hoverAt(position);
+  }
+
+  async rename(position: DocumentPosition, newName: string): Promise<RenameSummary> {
+    return this.forFile(position.file).rename(position, newName);
   }
 
   private forDefaultLanguage(): CommandService {
