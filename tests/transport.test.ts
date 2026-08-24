@@ -112,6 +112,24 @@ describe("MCP dispatch", () => {
     });
   });
 
+  it("validates write-tool arguments before dispatch", async () => {
+    const service = new CommandService(new EmptyProvider());
+
+    await expect(
+      dispatch(service, { method: "tools/call", params: { name: "lsp_code_actions", arguments: { file: "src/a.ts", apply: -1 } } })
+    ).rejects.toThrow("apply parameter must be a non-negative integer");
+    await expect(
+      dispatch(service, { method: "tools/call", params: { name: "lsp_code_actions", arguments: { file: "src/a.ts", only: "quickfix" } } })
+    ).rejects.toThrow("only parameter must be an array of strings");
+    await expect(
+      dispatch(service, { method: "tools/call", params: { name: "lsp_code_actions", arguments: { file: "src/a.ts", line: 2, end_line: 1 } } })
+    ).rejects.toThrow("range end must not precede range start");
+    await expect(
+      dispatch(service, { method: "tools/call", params: { name: "lsp_will_rename_files", arguments: { old_path: "a.ts", new_path: "b.ts", renamed: "yes" } } })
+    ).rejects.toThrow("renamed parameter must be a boolean");
+  });
+
+
   it("routes MCP tools/call requests to the canonical LSP command handlers", async () => {
     const service = new CommandService(new EmptyProvider());
 
@@ -144,6 +162,18 @@ describe("MCP dispatch", () => {
       structuredContent: { ok: true }
     });
   });
+
+  it("routes the post-move file notification through the provider", async () => {
+    const service = new CommandService(new EmptyProvider());
+
+    await expect(
+      dispatch(service, {
+        method: "tools/call",
+        params: { name: "lsp_will_rename_files", arguments: { old_path: "src/a.ts", new_path: "src/b.ts", renamed: true } }
+      })
+    ).resolves.toMatchObject({ structuredContent: { renamed: true } });
+  });
+
 
   it("passes timeoutMs to file diagnostics and rejects directory-only timeoutBudgetMs for files", async () => {
     const provider = new EmptyProvider();

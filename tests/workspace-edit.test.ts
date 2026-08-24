@@ -194,6 +194,72 @@ describe("workspace edit engine", () => {
     await expect(validateWorkspaceEdit(ignoring, { rootRealPath })).resolves.toBeUndefined();
   });
 
+  it("rejects malformed LSP workspace edit payloads before touching files", async () => {
+    await expect(normalizeWorkspaceEdit({ documentChanges: {} }, rootRealPath)).rejects.toThrow(
+      "documentChanges must be an array"
+    );
+    await expect(normalizeWorkspaceEdit({ changes: { [filePathToUri(path.join(rootPath, "a.ts"))]: {} } }, rootRealPath)).rejects.toThrow(
+      "must be an array"
+    );
+    await expect(normalizeWorkspaceEdit({ documentChanges: [{ kind: "create" }] }, rootRealPath)).rejects.toThrow(
+      "missing 'uri'"
+    );
+    await expect(normalizeWorkspaceEdit({ documentChanges: [{ textDocument: {}, edits: [] }] }, rootRealPath)).rejects.toThrow(
+      "must be a TextDocumentEdit"
+    );
+    await expect(normalizeWorkspaceEdit(null, rootRealPath)).rejects.toThrow("must be an object");
+  });
+
+  it("rejects conflicting versions and missing create parents without changing files", async () => {
+    const uri = filePathToUri(path.join(rootPath, "a.ts"));
+    const conflicting = await normalize({
+      documentChanges: [
+        { textDocument: { uri, version: 1 }, edits: [] },
+        { textDocument: { uri, version: 2 }, edits: [] }
+      ]
+    });
+    await expect(validateWorkspaceEdit(conflicting, { rootRealPath })).rejects.toThrow("Conflicting document versions");
+
+    const missingParent = await normalize({
+      documentChanges: [{ kind: "create", uri: filePathToUri(path.join(rootPath, "missing", "new.ts")) }]
+    });
+    await expect(validateWorkspaceEdit(missingParent, { rootRealPath })).rejects.toThrow("Parent directory does not exist");
+    await expect(fs.access(path.join(rootPath, "missing", "new.ts"))).rejects.toThrow();
+  });
+
+  it("supports overwrite and ignore options for create, rename, and delete operations", async () => {
+    const existing = filePathToUri(path.join(rootPath, "a.ts"));
+    const create = await normalize({
+      documentChanges: [{ kind: "create", uri: existing, options: { overwrite: true, content: "replaced" } }]
+    });
+    await validateWorkspaceEdit(create, { rootRealPath });
+    expect((await applyWorkspaceEdit(create)).applied).toBe(true);
+    await expect(read("a.ts")).resolves.toBe("replaced");
+
+    await fs.writeFile(path.join(rootPath, "target.ts"), "target", "utf8");
+    const rename = await normalize({
+      documentChanges: [
+        {
+          kind: "rename",
+          oldUri: filePathToUri(path.join(rootPath, "b.ts")),
+          newUri: filePathToUri(path.join(rootPath, "target.ts")),
+          options: { overwrite: true }
+        }
+      ]
+    });
+    await validateWorkspaceEdit(rename, { rootRealPath });
+    expect((await applyWorkspaceEdit(rename)).applied).toBe(true);
+    await expect(read("target.ts")).resolves.toContain("import");
+
+    const ignoredDelete = await normalize({
+      documentChanges: [{ kind: "delete", uri: filePathToUri(path.join(rootPath, "absent.ts")), options: { ignoreIfNotExists: true } }]
+    });
+    await validateWorkspaceEdit(ignoredDelete, { rootRealPath });
+    const deleteResult = await applyWorkspaceEdit(ignoredDelete);
+    expect(deleteResult).toMatchObject({ applied: true, deletedFiles: [] });
+  });
+
+
   it("clamps positions to the line end and handles multi-byte text (UTF-16)", async () => {
     await fs.writeFile(path.join(rootPath, "uni.ts"), "const s = \"привет\";\n", "utf8");
     const edit = await normalize({

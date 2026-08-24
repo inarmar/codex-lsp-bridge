@@ -430,6 +430,61 @@ describe("LspSemanticProvider", () => {
     expect(client.requests.map(({ method }) => method)).toContain("workspace/executeCommand");
   });
 
+  it("returns an empty code-action list when the server returns null", async () => {
+    const provider = createProvider();
+    client.codeActionResult = null;
+
+    const result = await provider.codeActions(
+      filePath,
+      { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } },
+      []
+    );
+
+    expect(result).toEqual({ actions: [] });
+    const request = client.requests.find(({ method }) => method === "textDocument/codeAction");
+    expect(request?.params).not.toMatchObject({ context: { only: expect.anything() } });
+  });
+
+  it("resolves a data-backed code action to a WorkspaceEdit", async () => {
+    const provider = createProvider();
+    const uri = filePathToUri(await fs.realpath(filePath));
+    client.codeActionResult = [{ title: "Rename Editor", isPreferred: false, data: { action: "rename" } }];
+    client.codeActionResolveResult = {
+      title: "Rename Editor",
+      edit: {
+        changes: {
+          [uri]: [{ range: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } }, newText: "Renamed" }]
+        }
+      }
+    };
+
+    const result = await provider.codeActions(
+      filePath,
+      { start: { line: 1, character: 14 }, end: { line: 1, character: 14 } },
+      undefined,
+      0
+    );
+
+    expect(result.actions[0]).toMatchObject({ isPreferred: false, hasEdit: false });
+    expect(result.applied).toMatchObject({ title: "Rename Editor", editCount: 1 });
+    expect(client.requests.map(({ method }) => method)).toContain("codeAction/resolve");
+    await expect(fs.readFile(filePath, "utf8")).resolves.toContain("Renamed");
+  });
+
+  it("rejects an invalid or non-executable code-action selection", async () => {
+    const provider = createProvider();
+    client.codeActionResult = [{ title: "Unavailable", data: { action: "unknown" } }];
+    client.codeActionResolveResult = null;
+
+    await expect(
+      provider.codeActions(filePath, { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } }, undefined, 1)
+    ).rejects.toThrow("out of range");
+    await expect(
+      provider.codeActions(filePath, { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } }, undefined, 0)
+    ).rejects.toThrow("not executable");
+  });
+
+
   it("requests semantic edits before a file move and synchronizes the move after Codex performs it", async () => {
     const provider = createProvider();
     const newPath = path.join(rootPath, "src", "renamed-editor.ts");
@@ -447,6 +502,40 @@ describe("LspSemanticProvider", () => {
     expect(client.notifications.map(({ method }) => method)).toContain("workspace/didRenameFiles");
     expect(client.notifications.map(({ method }) => method)).toContain("textDocument/didClose");
     expect(client.notifications.map(({ method }) => method)).toContain("textDocument/didOpen");
+  });
+
+  it("sends didRenameFiles without document notifications for an unopened file", async () => {
+    const provider = createProvider();
+    const newPath = path.join(rootPath, "src", "unopened-renamed.ts");
+    client.willRenameResult = null;
+
+    await provider.willRenameFiles(filePath, newPath);
+    await fs.rename(filePath, newPath);
+    const result = await provider.notifyFilesRenamed(filePath, newPath);
+
+    expect(result).toMatchObject({ renamed: true, changedFiles: [], editCount: 0 });
+    expect(client.notifications.map(({ method }) => method)).toContain("workspace/didRenameFiles");
+    expect(client.notifications.map(({ method }) => method)).not.toContain("textDocument/didClose");
+    expect(client.notifications.map(({ method }) => method)).not.toContain("textDocument/didOpen");
+  });
+
+  it("rejects file rename targets outside the root, including symlink escapes", async () => {
+    const provider = createProvider();
+    await expect(provider.willRenameFiles(filePath, path.join(os.tmpdir(), "outside-renamed.ts"))).rejects.toThrow(
+      "outside workspace root"
+    );
+
+    const outsideDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-edit-link-"));
+    const linkPath = path.join(rootPath, "linked");
+    try {
+      await fs.symlink(outsideDirectory, linkPath, "dir");
+      await expect(provider.willRenameFiles(filePath, path.join(linkPath, "renamed.ts"))).rejects.toThrow(
+        "outside workspace root"
+      );
+    } finally {
+      await fs.rm(outsideDirectory, { recursive: true, force: true });
+      await fs.rm(linkPath, { recursive: true, force: true });
+    }
   });
 
   it("applies server-pushed workspace/applyEdit through the pipeline and syncs open documents", async () => {
@@ -493,5 +582,26 @@ describe("LspSemanticProvider", () => {
     expect((lastChange.params as { contentChanges: Array<{ text: string }> }).contentChanges[0].text).toBe(
       "export const Editor = 42;\n"
     );
+  });
+
+  it("rejects malformed and out-of-root server-pushed edits with a response", async () => {
+    const provider = createProvider();
+    const outside = filePathToUri(path.join(os.tmpdir(), "server-outside.ts"));
+
+    client.emit("request", 12, "workspace/applyEdit", {
+      edit: { changes: { [outside]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText: "x" }] } }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(client.responses).toEqual([
+      { id: 12, result: { applied: false, failureReason: expect.stringContaining("outside workspace root") } }
+    ]);
+  });
+
+  it("acknowledges unknown server requests without hanging", async () => {
+    const provider = createProvider();
+    client.emit("request", 13, "window/showMessageRequest", { type: 3, message: "notice" });
+    expect(client.responses).toEqual([{ id: 13, result: null }]);
+    await provider.dispose();
   });
 });
