@@ -7,7 +7,8 @@ import {
   normalizeWorkspaceEdit,
   positionToOffset,
   previewWorkspaceEdit,
-  validateWorkspaceEdit
+  validateWorkspaceEdit,
+  type NormalizedWorkspaceEdit
 } from "../src/core/workspace-edit.js";
 import { filePathToUri } from "../src/utils/uri.js";
 
@@ -170,12 +171,12 @@ describe("workspace edit engine", () => {
     await expect(validateWorkspaceEdit(edit, { rootRealPath })).rejects.toThrow("does not exist");
 
     // Bypass validation to exercise the partial-failure path of apply.
-    const unvalidated = { operations: edit.operations.filter((operation) => operation.kind !== "delete").concat([{
-      kind: "delete" as const,
-      filePath: path.join(rootPath, "missing.ts"),
-      recursive: false,
-      ignoreIfNotExists: false
-    }]) };
+    const unvalidated: NormalizedWorkspaceEdit = {
+      operations: [
+        ...edit.operations.filter((operation) => operation.kind === "textEdit"),
+        { kind: "delete", filePath: path.join(rootPath, "missing.ts"), recursive: false, ignoreIfNotExists: false }
+      ]
+    };
     const result = await applyWorkspaceEdit(unvalidated);
 
     expect(result.applied).toBe(false);
