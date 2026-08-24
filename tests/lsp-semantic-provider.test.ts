@@ -320,13 +320,57 @@ describe("LspSemanticProvider", () => {
     });
     client.emit("request", 8, "client/registerCapability", { registrations: [] });
     client.emit("request", 9, "window/workDoneProgress/create", { token: "t" });
-    client.emit("request", 10, "workspace/applyEdit", { edit: {} });
 
     expect(client.responses).toEqual([
       { id: 7, result: [{}, {}] },
       { id: 8, result: null },
-      { id: 9, result: null },
-      { id: 10, result: { applied: false, failureReason: "workspace/applyEdit is not supported yet" } }
+      { id: 9, result: null }
     ]);
+  });
+
+  it("applies server-pushed workspace/applyEdit through the pipeline and syncs open documents", async () => {
+    const provider = createProvider();
+    const uri = filePathToUri(await fs.realpath(filePath));
+
+    // Open the document so the bridge tracks its version.
+    await provider.diagnostics(uri, { timeoutMs: 20 }).catch(() => undefined);
+    const openedNotifications = client.notifications.filter((entry) => entry.method === "textDocument/didOpen");
+    expect(openedNotifications.length).toBeGreaterThan(0);
+
+    client.responses.length = 0;
+    const applied = new Promise<void>((resolve) => {
+      client.emit(
+        "request",
+        11,
+        "workspace/applyEdit",
+        {
+          edit: {
+            documentChanges: [
+              {
+                textDocument: { uri, version: null },
+                edits: [
+                  {
+                    range: { start: { line: 0, character: 22 }, end: { line: 0, character: 23 } },
+                    newText: "42"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      );
+      setTimeout(resolve, 50);
+    });
+    await applied;
+
+    expect(client.responses).toEqual([{ id: 11, result: { applied: true } }]);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("export const Editor = 42;\n");
+
+    const changeNotifications = client.notifications.filter((entry) => entry.method === "textDocument/didChange");
+    expect(changeNotifications.length).toBeGreaterThan(0);
+    const lastChange = changeNotifications[changeNotifications.length - 1];
+    expect((lastChange.params as { contentChanges: Array<{ text: string }> }).contentChanges[0].text).toBe(
+      "export const Editor = 42;\n"
+    );
   });
 });

@@ -3,6 +3,13 @@ import path from "node:path";
 import type { LspClient, ServerProcessConfig } from "./json-rpc-lsp-client.js";
 import { lspSeverityToText } from "./diagnostics.js";
 import type { Diagnostic, DiagnosticOptions, DiagnosticReport, DocumentPosition, HoverInfo, Location, Position, SemanticProvider, SymbolMatch } from "./types.js";
+import {
+  applyWorkspaceEdit as applyEdit,
+  normalizeWorkspaceEdit,
+  validateWorkspaceEdit,
+  type NormalizedWorkspaceEdit,
+  type WorkspaceEditResult
+} from "./workspace-edit.js";
 import { filePathToUri, uriToFilePath } from "../utils/uri.js";
 
 interface LspDiagnostic {
@@ -56,6 +63,7 @@ export class LspSemanticProvider implements SemanticProvider {
     }>
   >();
   private readonly rootRealPathPromise: Promise<string>;
+  private editQueue: Promise<unknown> = Promise.resolve();
   private client: LspClient;
 
   constructor(private readonly options: LspSemanticProviderOptions) {
@@ -215,8 +223,20 @@ export class LspSemanticProvider implements SemanticProvider {
 
   private handleServerRequest(id: number, method: string, params: unknown): void {
     if (method === "workspace/applyEdit") {
-      // Phase 2 wires this into the Workspace Edit pipeline.
-      this.client.respond(id, { applied: false, failureReason: "workspace/applyEdit is not supported yet" });
+      const edit = (params as { edit?: unknown } | null)?.edit;
+      void this.applyWorkspaceEdit(edit)
+        .then((result) => {
+          this.client.respond(id, {
+            applied: result.applied,
+            ...(result.failure ? { failureReason: result.failure } : {})
+          });
+        })
+        .catch((error: unknown) => {
+          this.client.respond(id, {
+            applied: false,
+            failureReason: error instanceof Error ? error.message : String(error)
+          });
+        });
       return;
     }
     if (method === "workspace/configuration") {
@@ -228,6 +248,71 @@ export class LspSemanticProvider implements SemanticProvider {
     // client/(un)registerCapability, unknown methods: acknowledge so the
     // server never hangs.
     this.client.respond(id, null);
+  }
+
+  /** The single entry point for applying server-returned edits; serialized so concurrent edits cannot interleave. */
+  async applyWorkspaceEdit(raw: unknown): Promise<WorkspaceEditResult> {
+    const run = async (): Promise<WorkspaceEditResult> => {
+      const rootRealPath = await this.rootRealPathPromise;
+      const edit = await normalizeWorkspaceEdit(raw, rootRealPath);
+      await validateWorkspaceEdit(edit, {
+        rootRealPath,
+        documentVersion: (uri) => this.openedDocumentsByUri.get(uri)?.version
+      });
+      const result = await applyEdit(edit);
+      if (result.applied) {
+        await this.syncAfterWorkspaceEdit(edit);
+      }
+      return result;
+    };
+
+    const previous = this.editQueue;
+    const next = previous.then(run, run);
+    this.editQueue = next.catch(() => undefined);
+    return next;
+  }
+
+  private async syncAfterWorkspaceEdit(edit: NormalizedWorkspaceEdit): Promise<void> {
+    const createdUris: string[] = [];
+    const renamedUris: Array<{ oldUri: string; newUri: string }> = [];
+    const deletedUris: string[] = [];
+
+    for (const operation of edit.operations) {
+      if (operation.kind === "textEdit") {
+        const uri = filePathToUri(operation.filePath);
+        if (this.openedDocumentsByUri.has(uri)) {
+          await this.openOrUpdateDocument(uri);
+        }
+      } else if (operation.kind === "create") {
+        createdUris.push(filePathToUri(operation.filePath));
+      } else if (operation.kind === "rename") {
+        renamedUris.push({ oldUri: filePathToUri(operation.oldPath), newUri: filePathToUri(operation.newPath) });
+        const oldUri = filePathToUri(operation.oldPath);
+        if (this.openedDocumentsByUri.has(oldUri)) {
+          this.client.notify("textDocument/didClose", { textDocument: { uri: oldUri } });
+          this.openedDocumentsByUri.delete(oldUri);
+        }
+      } else {
+        deletedUris.push(filePathToUri(operation.filePath));
+        const uri = filePathToUri(operation.filePath);
+        if (this.openedDocumentsByUri.has(uri)) {
+          this.client.notify("textDocument/didClose", { textDocument: { uri } });
+          this.openedDocumentsByUri.delete(uri);
+        }
+      }
+    }
+
+    if (createdUris.length > 0) {
+      this.client.notify("workspace/didCreateFiles", { files: createdUris.map((uri) => ({ uri })) });
+    }
+    if (renamedUris.length > 0) {
+      this.client.notify("workspace/didRenameFiles", {
+        files: renamedUris.map(({ oldUri, newUri }) => ({ oldUri, newUri }))
+      });
+    }
+    if (deletedUris.length > 0) {
+      this.client.notify("workspace/didDeleteFiles", { files: deletedUris.map((uri) => ({ uri })) });
+    }
   }
 
   private async ensureInitialized(): Promise<void> {
