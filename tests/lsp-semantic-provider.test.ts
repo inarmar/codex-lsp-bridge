@@ -11,6 +11,7 @@ import { filePathToUri } from "../src/utils/uri.js";
 class FakeClient extends EventEmitter implements LspClient {
   readonly requests: Array<{ method: string; params?: unknown }> = [];
   readonly notifications: Array<{ method: string; params?: unknown }> = [];
+  readonly responses: Array<{ id: number; result: unknown }> = [];
   symbolResults: unknown[] = [];
   sourceDefinitionResult: unknown[] | null = null;
   definitionResult: unknown = null;
@@ -33,6 +34,14 @@ class FakeClient extends EventEmitter implements LspClient {
   notify(method: string, params?: unknown): void {
     this.notifications.push({ method, params });
     this.onNotify?.(method, params);
+  }
+
+  respond(id: number, result: unknown): void {
+    this.responses.push({ id, result });
+  }
+
+  respondError(id: number, _code: number, _message: string): void {
+    this.responses.push({ id, result: null });
   }
 
   stop(): Promise<void> {
@@ -301,5 +310,23 @@ describe("LspSemanticProvider", () => {
     await provider.dispose();
 
     expect(client.stopped).toBe(true);
+  });
+
+  it("answers server-to-bridge requests instead of dropping them", async () => {
+    const provider = createProvider();
+
+    client.emit("request", 7, "workspace/configuration", {
+      items: [{ scope: "file", section: "typescript" }, { scope: "file", section: "javascript" }]
+    });
+    client.emit("request", 8, "client/registerCapability", { registrations: [] });
+    client.emit("request", 9, "window/workDoneProgress/create", { token: "t" });
+    client.emit("request", 10, "workspace/applyEdit", { edit: {} });
+
+    expect(client.responses).toEqual([
+      { id: 7, result: [{}, {}] },
+      { id: 8, result: null },
+      { id: 9, result: null },
+      { id: 10, result: { applied: false, failureReason: "workspace/applyEdit is not supported yet" } }
+    ]);
   });
 });

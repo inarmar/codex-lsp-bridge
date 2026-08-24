@@ -66,6 +66,9 @@ export class LspSemanticProvider implements SemanticProvider {
         this.captureDiagnostics(params);
       }
     });
+    this.client.on("request", (id, method, params) => {
+      this.handleServerRequest(id, method, params);
+    });
     this.client.on("exit", () => {
       this.initialized = false;
       this.workspaceDocumentOpened = false;
@@ -210,6 +213,23 @@ export class LspSemanticProvider implements SemanticProvider {
     await this.client.stop();
   }
 
+  private handleServerRequest(id: number, method: string, params: unknown): void {
+    if (method === "workspace/applyEdit") {
+      // Phase 2 wires this into the Workspace Edit pipeline.
+      this.client.respond(id, { applied: false, failureReason: "workspace/applyEdit is not supported yet" });
+      return;
+    }
+    if (method === "workspace/configuration") {
+      const items = (params as { items?: unknown[] } | null)?.items ?? [];
+      this.client.respond(id, items.map(() => ({})));
+      return;
+    }
+    // window/workDoneProgress/create, window/showMessageRequest,
+    // client/(un)registerCapability, unknown methods: acknowledge so the
+    // server never hangs.
+    this.client.respond(id, null);
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
 
@@ -224,14 +244,32 @@ export class LspSemanticProvider implements SemanticProvider {
         }
       ],
       capabilities: {
+        general: {
+          positionEncodings: ["utf-16"]
+        },
         textDocument: {
           publishDiagnostics: {},
           definition: {},
           references: {},
-          hover: {}
+          hover: {},
+          rename: { prepareSupport: true },
+          codeAction: {
+            dataSupport: true,
+            resolveSupport: { properties: ["edit"] }
+          }
         },
         workspace: {
-          symbol: {}
+          symbol: {},
+          executeCommand: {},
+          workspaceEdit: {
+            documentChanges: true,
+            resourceOperations: ["create", "rename", "delete"],
+            failureHandling: "abort"
+          },
+          fileOperations: {
+            willRename: true,
+            didRename: true
+          }
         }
       }
     });

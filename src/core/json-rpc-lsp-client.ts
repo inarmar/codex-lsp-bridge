@@ -17,11 +17,14 @@ export interface ServerProcessConfig {
 }
 
 export interface LspClient {
+  on(eventName: "request", listener: (id: number, method: string, params: unknown) => void): this;
   on(eventName: "notification", listener: (method: string, params: unknown) => void): this;
   on(eventName: "stderr", listener: (chunk: string) => void): this;
   on(eventName: "exit", listener: (event: { code: number | null; signal: NodeJS.Signals | null }) => void): this;
   request<T>(method: string, params?: unknown): Promise<T>;
   notify(method: string, params?: unknown): void;
+  respond(id: number, result: unknown): void;
+  respondError(id: number, code: number, message: string): void;
   stop(): Promise<void>;
 }
 
@@ -85,6 +88,16 @@ export class JsonRpcLspClient extends EventEmitter implements LspClient {
     this.write({ jsonrpc: "2.0", method, params });
   }
 
+  respond(id: number, result: unknown): void {
+    if (!this.process) return;
+    this.write({ jsonrpc: "2.0", id, result });
+  }
+
+  respondError(id: number, code: number, message: string): void {
+    if (!this.process) return;
+    this.write({ jsonrpc: "2.0", id, error: { code, message } });
+  }
+
   async stop(): Promise<void> {
     if (!this.process) return;
 
@@ -92,7 +105,7 @@ export class JsonRpcLspClient extends EventEmitter implements LspClient {
       await this.request("shutdown");
       this.notify("exit");
     } finally {
-      this.process.kill();
+      this.process?.kill();
       this.process = undefined;
     }
   }
@@ -137,6 +150,12 @@ export class JsonRpcLspClient extends EventEmitter implements LspClient {
   }
 
   private handleMessage(message: JsonRpcMessage): void {
+    if (typeof message.id === "number" && message.method !== undefined) {
+      // Server-to-bridge request: must be answered, otherwise the server hangs.
+      this.emit("request", message.id, message.method, message.params);
+      return;
+    }
+
     if (typeof message.id === "number") {
       const pending = this.pending.get(message.id);
       if (!pending) return;
