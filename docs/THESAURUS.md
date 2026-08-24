@@ -34,6 +34,7 @@ skill: ubiquitous-language
 - **Bridge** `codex-lsp-bridge` kind:concept avoid: `proxy`, `wrapper`
 - **Bridge Config** `BridgeConfig` kind:value
 - **Command Service** `CommandService` kind:service
+- **Default Language Servers** `defaultLanguageServers` kind:value
 - **Definition** `Definition` kind:query
 - **Diagnostic** `Diagnostic` kind:value
 - **Diagnostic Conclusion** `DiagnosticConclusion` kind:state avoid: `verdict`
@@ -47,6 +48,8 @@ skill: ubiquitous-language
 - **Hover** `Hover` kind:query
 - **Hover Info** `HoverInfo` kind:value avoid: `HoverResult`
 - **Install Hint** `InstallHint` kind:concept
+- **Language Descriptor** `LanguageDescriptor` kind:value
+- **Language Registry** `LanguageRegistry` kind:service
 - **Language Server** `LanguageServer` kind:concept avoid: `LanguageServerConfig` (that is its config type), `Lsp`
 - **Language Server Override** `LanguageServerOverride` kind:value
 - **LSP Client** `LspClient` kind:service
@@ -87,6 +90,12 @@ skill: ubiquitous-language
 - **Definition**: The validated, read-only facade over one SemanticProvider: each method (`diagnostics`, `definition`, `references`, `symbols`, `hover`, and their `*At` variants) validates inputs (non-empty symbol, 1-based line/character) and delegates to the provider. Despite the name, all methods are queries — "Command" refers to the CLI/MCP tool surface this layer serves; the project is read-only by design.
 - **NOT**: A write-model command bus or an aggregate command handler; nothing here mutates source files.
 - **Related**: Semantic Provider, Workspace Command Service
+
+### Default Language Servers
+
+- **Definition**: The defaults layer of Bridge Config language servers: TypeScript, Rust, Python, Go as ordinary Language Descriptor records (`default-language-servers.ts`). The only place in code where concrete language names appear; identical in format and treatment to user-supplied descriptors — built-in languages are not a separate mechanism.
+- **NOT**: A registry or a runtime structure (that's Language Registry); just data, merged like any other config layer.
+- **Related**: Language Descriptor, Language Registry, Bridge Config
 
 ### Definition
 
@@ -162,8 +171,20 @@ skill: ubiquitous-language
 
 ### Install Hint
 
-- **Definition**: The per-language command string telling the user how to install the Language Server (e.g. `npm install -g typescript-language-server typescript`).
-- **Related**: Language Server, Doctor, Support Level
+- **Definition**: The per-language command string telling the user how to install the Language Server (e.g. `npm install -g typescript-language-server typescript`); defaults to an instruction naming the descriptor's `command`.
+- **Related**: Language Server, Doctor, Support Level, Language Descriptor
+
+### Language Descriptor
+
+- **Definition**: The complete record describing one language: `languageId`, `command`, `args`, `extensions`, `workspaceSeedFiles`, `installHint`, `supportLevel`. One format for the defaults layer and for user config layers; required after merging: `command` and `extensions`.
+- **NOT**: A runtime server process config (that's `ServerProcessConfig`, built from a descriptor at provider creation) or a registry (that's Language Registry).
+- **Related**: Language Registry, Default Language Servers, Bridge Config
+
+### Language Registry
+
+- **Definition**: The validator and access layer over merged Bridge Config language servers (`LanguageRegistry`): validates descriptors (required fields, no extension collisions), exposes `languages()` / `descriptor()` / `detectByExtension()` / `extensions()`. The single source of truth about languages at runtime.
+- **NOT**: The merge mechanism (that's the Bridge Config cascade: defaults → global → workspace) or a provider cache (that's LSP Provider Registry).
+- **Related**: Language Descriptor, Bridge Config, LSP Provider Registry, Supported Language
 
 ### Language Server
 
@@ -235,13 +256,15 @@ skill: ubiquitous-language
 
 ### Supported Language
 
-- **Definition**: A language the Bridge can serve: `typescript`, `rust`, `python`, or `go` (`SupportedLanguage`, detected from file extension via `detectLanguageFromFile`).
-- **Related**: Support Level, Language Server
+- **Definition**: Any language name present in the Language Registry — from the Default Language Servers layer or added by a config layer (`SupportedLanguage`, now an alias for string). Detected from file extension via the registry.
+- **NOT**: A closed hardcoded list; the union of four language names is dead.
+- **Related**: Language Registry, Default Language Servers, Support Level
 
 ### Support Level
 
-- **Definition**: Per-language maturity marker: `primary` (TypeScript) or `experimental` (Rust, Python, Go).
-- **Related**: Supported Language
+- **Definition**: Per-language maturity marker: `primary` or `experimental` (default `experimental`). There is deliberately no `custom` value — built-in and user-added languages are indistinguishable.
+- **NOT**: A distinction between default and user languages (that distinction does not exist).
+- **Related**: Supported Language, Language Descriptor
 
 ### Symbol Match
 
