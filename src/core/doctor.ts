@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listLanguageServerConfigs } from "../adapters/language-config.js";
+import { createLanguageServerConfig, LanguageRegistry } from "../adapters/language-registry.js";
 import { loadConfig } from "./config.js";
 import { resolveDiagnosticsTimeout, type ResolvedDiagnosticsTimeout } from "./diagnostics-timeout.js";
 
@@ -36,15 +36,17 @@ export function runDoctor(rootPath: string): DoctorResult {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   const config = loadConfig(rootPath);
   const diagnostics = resolveDiagnosticsTimeout(rootPath, config.diagnosticsTimeoutMs);
-  const languages: DoctorLanguageResult[] = listLanguageServerConfigs(rootPath).map((config) => {
-    const executablePath = findExecutable(config.server.command);
+  const registry = LanguageRegistry.fromMergedConfig(config);
+  const languages: DoctorLanguageResult[] = registry.languages().map((language) => {
+    const serverConfig = createLanguageServerConfig(language, registry.descriptor(language), rootPath);
+    const executablePath = findExecutable(serverConfig.server.command);
     return {
-      language: config.language,
-      command: config.server.command,
+      language,
+      command: serverConfig.server.command,
       status: (executablePath ? "ok" : "missing") as DoctorLanguageResult["status"],
-      supportLevel: config.supportLevel,
-      installHint: config.installHint,
-      seedFile: findSeedFile(rootPath, config.workspaceSeedFiles, config.extensions),
+      supportLevel: serverConfig.supportLevel,
+      installHint: serverConfig.installHint,
+      seedFile: findSeedFile(rootPath, serverConfig.workspaceSeedFiles, serverConfig.extensions),
       ...(executablePath ? { path: executablePath } : {})
     };
   });

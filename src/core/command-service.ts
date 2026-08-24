@@ -1,7 +1,7 @@
 import { summarizeDiagnostics } from "./diagnostics.js";
 import type { DiagnosticOptions, DiagnosticSummary, DocumentPosition, HoverInfo, Location, SemanticProvider, SymbolMatch } from "./types.js";
 import { uriToFilePath } from "../utils/uri.js";
-import type { SupportedLanguage } from "../adapters/language-config.js";
+import type { SupportedLanguage } from "../adapters/language-registry.js";
 
 export interface SemanticProviderRegistry {
   forLanguage(language: SupportedLanguage): SemanticProvider;

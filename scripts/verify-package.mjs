@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const requiredPackageFiles = [
   "dist/index.js",
-  "dist/adapters/language-config.js",
+  "dist/adapters/language-registry.js",
+  "dist/adapters/default-language-servers.js",
   "dist/core/command-service.js",
   "dist/core/lsp-provider-registry.js",
   "dist/transport/mcp.js",

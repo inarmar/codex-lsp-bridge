@@ -12,7 +12,8 @@ import { runDoctor } from "./core/doctor.js";
 import { LspProviderRegistry } from "./core/lsp-provider-registry.js";
 import { filePathToUri } from "./utils/uri.js";
 import { runStdioMcp } from "./transport/mcp.js";
-import type { SupportedLanguage } from "./adapters/language-config.js";
+import { defaultLanguageServers } from "./adapters/default-language-servers.js";
+import { LanguageRegistry, type SupportedLanguage } from "./adapters/language-registry.js";
 import type { DiagnosticStatus, DiagnosticSummary } from "./core/types.js";
 
 const defaultDirectoryDiagnosticsOptions = {
@@ -31,7 +32,7 @@ interface SourceFileListCacheEntry {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 0 || args[0] === "help" || args[0] === "--help" || args[0] === "-h") {
-    printUsage("stdout");
+    printUsage("stdout", defaultRegistry().languages());
     return;
   }
   if (args[0] === "install") {
@@ -49,6 +50,7 @@ async function main(): Promise<void> {
 
   const root = path.resolve(readOption(args, "--root") ?? process.cwd());
   const config = loadConfig(root);
+  const registry = LanguageRegistry.fromMergedConfig(config);
   const managers = new Map<string, LspProviderRegistry>();
   const sourceFileListCache = new Map<string, SourceFileListCacheEntry>();
   const serviceForRoot = (serviceRoot: string, languageOverride?: SupportedLanguage) => {
@@ -59,7 +61,7 @@ async function main(): Promise<void> {
       const diagnosticsTimeout = resolveDiagnosticsTimeout(resolvedRoot, rootConfig.diagnosticsTimeoutMs);
       scopedManager = new LspProviderRegistry(resolvedRoot, {
         diagnosticsTimeoutMs: diagnosticsTimeout.timeoutMs,
-        languageServers: rootConfig.languageServers
+        registry: LanguageRegistry.fromMergedConfig(rootConfig)
       });
       managers.set(resolvedRoot, scopedManager);
     }
@@ -72,7 +74,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    const language = readLanguage(args, config.defaultLanguage);
+    const language = readLanguage(args, config.defaultLanguage, registry.languages());
     const service = serviceForRoot(root, language);
 
     if (args[0] === "mcp") {
@@ -145,18 +147,22 @@ async function main(): Promise<void> {
       return;
     }
 
-    printUsage("stderr");
+    printUsage("stderr", registry.languages());
     process.exitCode = 1;
   } finally {
     await Promise.all([...managers.values()].map((manager) => manager.dispose()));
   }
 }
 
-function readLanguage(args: string[], fallback: SupportedLanguage): SupportedLanguage {
+function readLanguage(args: string[], fallback: SupportedLanguage, languages: string[]): SupportedLanguage {
   const value = readOption(args, "--language");
   if (!value) return fallback;
-  if (value === "typescript" || value === "rust" || value === "python" || value === "go") return value;
+  if (languages.includes(value)) return value;
   throw new Error(`Unsupported language: ${value}`);
+}
+
+function defaultRegistry(): LanguageRegistry {
+  return LanguageRegistry.fromLanguageServers(defaultLanguageServers);
 }
 
 function readOption(args: string[], option: string): string | undefined {
@@ -189,23 +195,24 @@ function requireValue(command: string, value: string | undefined): string {
   return value;
 }
 
-function printUsage(stream: "stdout" | "stderr"): void {
+function printUsage(stream: "stdout" | "stderr", languages: string[]): void {
+  const languageOptions = `[--language ${languages.join("|")}]`;
   const usage = `Usage:
   codex-lsp-bridge install [--dry-run]
   codex-lsp-bridge install [--auto-update] [--package package-spec] [--with-rust-analyzer] [--dry-run]
   codex-lsp-bridge uninstall [--dry-run]
   codex-lsp-bridge post-tool-diagnostics
   codex-lsp-bridge doctor [--root path]
-  codex-lsp-bridge diagnostics [--file path] [--timeout-ms n] [--language typescript|rust|python|go] [--root path]
+  codex-lsp-bridge diagnostics [--file path] [--timeout-ms n] ${languageOptions} [--root path]
   codex-lsp-bridge diagnostics --dir path [--severity error|warning|information|hint] [--max-files n] [--timeout-budget-ms n] [--concurrency n] [--root path]
-  codex-lsp-bridge definition <symbol> [--language typescript|rust|python|go] [--root path]
-  codex-lsp-bridge definition --file path --line n --character n [--language typescript|rust|python|go] [--root path]
-  codex-lsp-bridge references <symbol> [--language typescript|rust|python|go] [--root path]
-  codex-lsp-bridge references --file path --line n --character n [--language typescript|rust|python|go] [--root path]
-  codex-lsp-bridge symbols <query> [--language typescript|rust|python|go] [--root path]
-  codex-lsp-bridge hover <symbol> [--language typescript|rust|python|go] [--root path]
-  codex-lsp-bridge hover --file path --line n --character n [--language typescript|rust|python|go] [--root path]
-  codex-lsp-bridge mcp [--root path] [--language typescript|rust|python|go]`;
+  codex-lsp-bridge definition <symbol> ${languageOptions} [--root path]
+  codex-lsp-bridge definition --file path --line n --character n ${languageOptions} [--root path]
+  codex-lsp-bridge references <symbol> ${languageOptions} [--root path]
+  codex-lsp-bridge references --file path --line n --character n ${languageOptions} [--root path]
+  codex-lsp-bridge symbols <query> ${languageOptions} [--root path]
+  codex-lsp-bridge hover <symbol> ${languageOptions} [--root path]
+  codex-lsp-bridge hover --file path --line n --character n ${languageOptions} [--root path]
+  codex-lsp-bridge mcp [--root path] ${languageOptions}`;
   if (stream === "stdout") {
     console.log(usage);
     return;
@@ -242,7 +249,7 @@ interface DirectoryDiagnosticsOptions {
   concurrency: number;
 }
 
-async function collectSourceFiles(directory: string, maxFiles: number): Promise<{ files: string[]; truncated: boolean }> {
+async function collectSourceFiles(directory: string, maxFiles: number, extensions: string[]): Promise<{ files: string[]; truncated: boolean }> {
   const skipped = new Set([".git", ".next", ".turbo", "build", "coverage", "dist", "node_modules"]);
   const files: string[] = [];
   let truncated = false;
@@ -257,7 +264,7 @@ async function collectSourceFiles(directory: string, maxFiles: number): Promise<
         await visit(entryPath);
         continue;
       }
-      if (entry.isFile() && /\.(ts|tsx|js|jsx|rs|py|go)$/.test(entry.name)) {
+      if (entry.isFile() && extensions.includes(path.extname(entry.name))) {
         if (files.length >= maxFiles) {
           truncated = true;
           return;
@@ -281,8 +288,9 @@ async function collectDirectoryDiagnostics(
   sourceFileListCache: Map<string, SourceFileListCacheEntry>
 ) {
   const scopedService = serviceForRoot(root, language);
+  const extensions = LanguageRegistry.fromMergedConfig(loadConfig(root)).extensions();
   const startedAt = Date.now();
-  const sourceFiles = await readCachedSourceFiles(resolveDirectoryInsideRoot(root, dir), options.maxFiles, sourceFileListCache);
+  const sourceFiles = await readCachedSourceFiles(resolveDirectoryInsideRoot(root, dir), options.maxFiles, extensions, sourceFileListCache);
   const summaries: DiagnosticSummary[] = [];
   let budgetTimedOut = false;
 
@@ -317,15 +325,16 @@ async function collectDirectoryDiagnostics(
 async function readCachedSourceFiles(
   directory: string,
   maxFiles: number,
+  extensions: string[],
   cache: Map<string, SourceFileListCacheEntry>
 ): Promise<{ files: string[]; truncated: boolean; cached: boolean }> {
-  const cacheKey = `${directory}\0${maxFiles}`;
+  const cacheKey = `${directory}\0${maxFiles}\0${extensions.join(",")}`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.createdAt <= sourceFileListCacheTtlMs) {
     return { files: cached.files, truncated: cached.truncated, cached: true };
   }
 
-  const collected = await collectSourceFiles(directory, maxFiles);
+  const collected = await collectSourceFiles(directory, maxFiles, extensions);
   cache.set(cacheKey, {
     createdAt: Date.now(),
     files: collected.files,

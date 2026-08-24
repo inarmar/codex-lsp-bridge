@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createLanguageServerConfig } from "../src/adapters/language-config.js";
+import { createLanguageServerConfig } from "../src/adapters/language-registry.js";
+import { defaultLanguageServers } from "../src/adapters/default-language-servers.js";
 import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-client.js";
 import { LspSemanticProvider } from "../src/core/lsp-semantic-provider.js";
 import { filePathToUri } from "../src/utils/uri.js";
@@ -21,7 +22,7 @@ describe.skipIf(!hasTypeScriptLanguageServer)("TypeScript language server integr
     );
     await fs.writeFile(filePath, "const value: string = 1;\n", "utf8");
 
-    const config = createLanguageServerConfig("typescript", rootPath);
+    const config = createLanguageServerConfig("typescript", defaultLanguageServers.typescript, rootPath);
     const provider = new LspSemanticProvider({
       rootPath,
       languageId: config.languageId,

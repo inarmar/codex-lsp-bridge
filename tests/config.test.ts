@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/core/config.js";
+import { LanguageRegistry } from "../src/adapters/language-registry.js";
 
 describe("config", () => {
   let rootPath = "";
@@ -67,6 +68,61 @@ describe("config", () => {
 
     expect(loadConfig(rootPath)).toMatchObject({
       defaultLanguage: "rust"
+    });
+  });
+
+  it("merges language server entries field by field over the defaults layer", async () => {
+    rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
+    homePath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-home-"));
+    process.env.CODEX_HOME = path.join(homePath, ".codex");
+    await fs.mkdir(process.env.CODEX_HOME, { recursive: true });
+    await fs.writeFile(
+      path.join(process.env.CODEX_HOME, "lsp-client.json"),
+      JSON.stringify({ languageServers: { rust: { args: ["--log", "verbose"] } } })
+    );
+    await fs.mkdir(path.join(rootPath, ".codex"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootPath, ".codex", "lsp-client.json"),
+      JSON.stringify({ languageServers: { rust: { command: "my-analyzer" } } })
+    );
+
+    const config = loadConfig(rootPath);
+    expect(config.languageServers.rust).toMatchObject({
+      command: "my-analyzer",
+      args: ["--log", "verbose"],
+      extensions: [".rs"]
+    });
+    const registry = LanguageRegistry.fromMergedConfig(config);
+    expect(registry.descriptor("rust").command).toBe("my-analyzer");
+    expect(registry.detectByExtension("src/main.rs")).toBe("rust");
+  });
+
+  it("accepts a new language defined entirely in config", async () => {
+    rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
+    await fs.mkdir(path.join(rootPath, ".codex"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootPath, ".codex", "lsp-client.json"),
+      JSON.stringify({
+        defaultLanguage: "zig",
+        languageServers: { zig: { command: "zls", extensions: [".zig"], installHint: "npm install -g zls" } }
+      })
+    );
+
+    const config = loadConfig(rootPath);
+    const registry = LanguageRegistry.fromMergedConfig(config);
+    expect(config.defaultLanguage).toBe("zig");
+    expect(registry.languages()).toEqual(["typescript", "rust", "python", "go", "zig"]);
+    expect(registry.descriptor("zig")).toMatchObject({ command: "zls", installHint: "npm install -g zls" });
+    expect(registry.detectByExtension("src/main.zig")).toBe("zig");
+  });
+
+  it("falls back to typescript when the default language is unknown", async () => {
+    rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
+    await fs.mkdir(path.join(rootPath, ".codex"), { recursive: true });
+    await fs.writeFile(path.join(rootPath, ".codex", "lsp-client.json"), JSON.stringify({ defaultLanguage: "java" }));
+
+    expect(loadConfig(rootPath)).toMatchObject({
+      defaultLanguage: "typescript"
     });
   });
 });

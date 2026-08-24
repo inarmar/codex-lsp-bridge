@@ -51,7 +51,6 @@ skill: ubiquitous-language
 - **Language Descriptor** `LanguageDescriptor` kind:value
 - **Language Registry** `LanguageRegistry` kind:service
 - **Language Server** `LanguageServer` kind:concept avoid: `LanguageServerConfig` (that is its config type), `Lsp`
-- **Language Server Override** `LanguageServerOverride` kind:value
 - **LSP Client** `LspClient` kind:service
 - **LSP Provider Registry** `LspProviderRegistry` kind:service
 - **Location** `Location` kind:value
@@ -81,9 +80,9 @@ skill: ubiquitous-language
 
 ### Bridge Config
 
-- **Definition**: The user-facing configuration of the whole Bridge, loaded from `~/.codex/lsp-client.json` and `<workspace>/.codex/lsp-client.json` (workspace wins): `defaultLanguage`, `diagnosticsTimeoutMs`, `hook` options, and per-language `LanguageServerOverride`s. The config file keeps its historical name `lsp-client.json`.
+- **Definition**: The user-facing configuration of the whole Bridge, loaded from `~/.codex/lsp-client.json` and `<workspace>/.codex/lsp-client.json` (workspace wins): `defaultLanguage`, `diagnosticsTimeoutMs`, `hook` options, and `languageServers` — per-language entries merged field by field over the Default Language Servers layer (defaults → global → workspace). The config file keeps its historical name `lsp-client.json`.
 - **NOT**: A language-server descriptor (that's Language Server via `LanguageServerConfig`) or a spawn recipe (`ServerProcessConfig`).
-- **Related**: Language Server Override, Diagnostics Timeout Policy, Supported Language
+- **Related**: Language Descriptor, Default Language Servers, Diagnostics Timeout Policy, Supported Language
 
 ### Command Service
 
@@ -190,12 +189,7 @@ skill: ubiquitous-language
 
 - **Definition**: An external LSP server process the Bridge talks to for one Supported Language (typescript-language-server, rust-analyzer, pyright-langserver, gopls); configured via `LanguageServerConfig` / `ServerProcessConfig`.
 - **NOT**: The Bridge's own client side (that's LSP Client) or the semantic façade (that's Semantic Provider).
-- **Related**: LSP Client, Semantic Provider, Supported Language, Language Server Override
-
-### Language Server Override
-
-- **Definition**: A user-supplied `command`/`args` replacement for one language's Language Server, from the `languageServers` section of the Bridge Config file.
-- **Related**: Language Server, Bridge Config
+- **Related**: LSP Client, Semantic Provider, Supported Language, Language Descriptor
 
 ### LSP Client
 
@@ -211,9 +205,9 @@ skill: ubiquitous-language
 
 ### LSP Provider Registry
 
-- **Definition**: The per-language factory and cache of SemanticProviders (`LspProviderRegistry`, `src/core/lsp-provider-registry.ts`): builds one `LspSemanticProvider` per Supported Language, returns the cached instance on every call (language servers are expensive to start), routes by file extension via `forFile`, and disposes all spawned servers. Implements `SemanticProviderRegistry`.
+- **Definition**: The per-language factory and cache of SemanticProviders (`LspProviderRegistry`, `src/core/lsp-provider-registry.ts`): builds one `LspSemanticProvider` per Supported Language, returns the cached instance on every call (language servers are expensive to start), routes by file extension via `forFile` (through its Language Registry), and disposes all spawned servers. Implements `SemanticProviderRegistry`; built per workspace root from the merged Bridge Config.
 - **NOT**: The semantic layer itself (that's Semantic Provider) or the raw JSON-RPC conversation (that's LSP Client).
-- **Related**: Semantic Provider, Language Server, Supported Language
+- **Related**: Semantic Provider, Language Server, Language Registry, Supported Language
 
 ### Post-Tool Diagnostics
 
@@ -314,6 +308,7 @@ skill: ubiquitous-language
 
 - `LspManager` → `LspProviderRegistry` in: git history, docs predating the rename — renamed 2025, decision recorded in `docs/THESAURUS.md`
 - `LspClientConfig` → `BridgeConfig` in: git history — type renamed; the config FILE keeps its historical name `lsp-client.json` (renaming it is breaking for existing installs)
+- `LanguageServerOverride` → `LanguageDescriptor` in: git history — config entries are partial descriptors merged field by field over the defaults layer; the override type was absorbed by the descriptor format
 
 ## Unresolved
 
