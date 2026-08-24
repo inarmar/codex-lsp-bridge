@@ -85,24 +85,56 @@ export class LanguageRegistry {
   }
 
   private add(language: string, entry: LanguageServerEntry): void {
-    const descriptor = normalizeDescriptor(language, entry);
-    if (!descriptor) return; // invalid entries are skipped; Phase 2 turns this into an error
-    if (descriptor.extensions.some((extension) => this.extensionOwners.has(extension))) return; // first language wins; Phase 2 turns this into an error
-    this.descriptors.set(language, descriptor);
-    for (const extension of descriptor.extensions) this.extensionOwners.set(extension, language);
+    const normalized = normalizeDescriptor(language, entry);
+    if (typeof normalized === "string") {
+      throw new Error(normalized);
+    }
+    const collision = normalized.extensions.find((extension) => this.extensionOwners.has(extension));
+    if (collision) {
+      throw new Error(`languageServers.${language}: extension "${collision}" is already used by language "${this.extensionOwners.get(collision)}"`);
+    }
+    this.descriptors.set(language, normalized);
+    for (const extension of normalized.extensions) this.extensionOwners.set(extension, language);
   }
 }
 
-function normalizeDescriptor(language: string, entry: LanguageServerEntry): LanguageDescriptor | undefined {
-  if (!entry || typeof entry !== "object") return undefined;
+function normalizeDescriptor(language: string, entry: LanguageServerEntry): LanguageDescriptor | string {
+  if (!entry || typeof entry !== "object") return `languageServers.${language}: expected an object`;
+  const problems: string[] = [];
+
   const command = readNonEmptyString(entry.command);
+  if (!command) {
+    problems.push(entry.command === undefined ? `missing required field 'command'` : `field 'command' must be a non-empty string`);
+  }
+
   const extensions = readExtensions(entry.extensions);
-  if (!command || !extensions) return undefined;
+  if (!extensions) {
+    problems.push(entry.extensions === undefined ? `missing required field 'extensions'` : `field 'extensions' must be a non-empty array of extensions starting with '.'`);
+  }
+
+  if (entry.languageId !== undefined && !readNonEmptyString(entry.languageId)) {
+    problems.push(`field 'languageId' must be a non-empty string`);
+  }
+  if (entry.args !== undefined && !readStringArray(entry.args)) {
+    problems.push(`field 'args' must be an array of strings`);
+  }
+  if (entry.workspaceSeedFiles !== undefined && !readStringArray(entry.workspaceSeedFiles)) {
+    problems.push(`field 'workspaceSeedFiles' must be an array of strings`);
+  }
+  if (entry.installHint !== undefined && !readNonEmptyString(entry.installHint)) {
+    problems.push(`field 'installHint' must be a non-empty string`);
+  }
+  if (entry.supportLevel !== undefined && entry.supportLevel !== "primary" && entry.supportLevel !== "experimental") {
+    problems.push(`field 'supportLevel' must be "primary" or "experimental"`);
+  }
+
+  if (problems.length > 0) return `languageServers.${language}: ${problems.join("; ")}`;
+
   return {
     languageId: readNonEmptyString(entry.languageId) ?? language,
-    command,
+    command: command!,
     args: readStringArray(entry.args) ?? [],
-    extensions,
+    extensions: extensions!,
     workspaceSeedFiles: readStringArray(entry.workspaceSeedFiles) ?? [],
     installHint: readNonEmptyString(entry.installHint) ?? `install "${command}" and make sure it is available on PATH`,
     supportLevel: entry.supportLevel === "primary" ? "primary" : "experimental"

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Languages are now configured, not hardcoded: define any language server with a
+  `languageServers` entry in `lsp-client.json` (`command` + `extensions` required,
+  `languageId`, `args`, `workspaceSeedFiles`, `installHint`, `supportLevel` optional).
+  Built-in languages are the defaults layer of the same mechanism and can be
+  overridden field by field.
+- **Breaking (invalid configs only):** unknown or malformed `languageServers` entries
+  now fail fast with a descriptive error instead of being silently ignored. Valid
+  configs are unaffected.
+
 ## 0.3.3
 
 - Publish the `--with-rust-analyzer` installer option in the CLI package.

@@ -64,7 +64,10 @@ function mergeLanguageServers(
 ): Record<string, LanguageServerEntry> {
   const merged: Record<string, LanguageServerEntry> = { ...base };
   for (const [language, entry] of Object.entries(overlay ?? {})) {
-    if (!entry || typeof entry !== "object") continue;
+    if (!entry || typeof entry !== "object") {
+      merged[language] = entry; // pass garbage through — LanguageRegistry reports it
+      continue;
+    }
     const current: LanguageServerEntry = { ...merged[language] };
     for (const [key, value] of Object.entries(entry)) {
       if (value !== undefined) (current as Record<string, unknown>)[key] = value;

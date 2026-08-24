@@ -58,17 +58,21 @@ describe("language registry", () => {
     expect(minimal.extensions()).toEqual([".zig"]);
   });
 
-  it("skips entries without required fields and languages colliding on an extension", () => {
-    const mixed = LanguageRegistry.fromLanguageServers({
-      rust: { command: "rust-analyzer", extensions: [".rs"] },
-      incomplete: { command: "some-server" },
-      colliding: { command: "another-server", extensions: [".rs"] },
-      valid: { command: "zls", extensions: [".zig"] }
-    });
+  it("rejects entries without required fields and languages colliding on an extension", () => {
+    const base = { rust: { command: "rust-analyzer", extensions: [".rs"] } };
 
-    expect(mixed.languages()).toEqual(["rust", "valid"]);
-    expect(mixed.detectByExtension("src/main.rs")).toBe("rust");
-    expect(mixed.descriptor("rust").command).toBe("rust-analyzer");
+    expect(() => LanguageRegistry.fromLanguageServers({ ...base, incomplete: { command: "some-server" } })).toThrow(
+      "languageServers.incomplete: missing required field 'extensions'"
+    );
+    expect(() => LanguageRegistry.fromLanguageServers({ ...base, colliding: { command: "another-server", extensions: [".rs"] } })).toThrow(
+      'languageServers.colliding: extension ".rs" is already used by language "rust"'
+    );
+    expect(() => LanguageRegistry.fromLanguageServers({ ...base, garbage: "not an object" })).toThrow(
+      "languageServers.garbage: expected an object"
+    );
+    expect(() => LanguageRegistry.fromLanguageServers({ ...base, badArgs: { command: "some-server", extensions: [".zig"], args: "--stdio" } })).toThrow(
+      "languageServers.badArgs: field 'args' must be an array of strings"
+    );
   });
 });
 

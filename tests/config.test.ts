@@ -125,4 +125,22 @@ describe("config", () => {
       defaultLanguage: "typescript"
     });
   });
+
+  it("fails fast on incomplete and colliding language server entries", async () => {
+    rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
+    await fs.mkdir(path.join(rootPath, ".codex"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootPath, ".codex", "lsp-client.json"),
+      JSON.stringify({ languageServers: { zig: { command: "zls" } } })
+    );
+
+    expect(() => loadConfig(rootPath)).toThrow("languageServers.zig: missing required field 'extensions'");
+
+    await fs.writeFile(
+      path.join(rootPath, ".codex", "lsp-client.json"),
+      JSON.stringify({ languageServers: { myts: { command: "other-server", extensions: [".ts"] } } })
+    );
+
+    expect(() => loadConfig(rootPath)).toThrow('languageServers.myts: extension ".ts" is already used by language "typescript"');
+  });
 });
