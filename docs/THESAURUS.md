@@ -34,6 +34,7 @@ skill: ubiquitous-language
 - **Bridge** `codex-lsp-bridge` kind:concept avoid: `proxy`, `wrapper`
 - **Bridge Config** `BridgeConfig` kind:value
 - **Command Service** `CommandService` kind:service
+- **Code Action** `CodeAction` kind:command
 - **Default Language Servers** `defaultLanguageServers` kind:value
 - **Definition** `Definition` kind:query
 - **Diagnostic** `Diagnostic` kind:value
@@ -45,6 +46,7 @@ skill: ubiquitous-language
 - **Directory Diagnostics** `DirectoryDiagnostics` kind:query avoid: `directoryScan`
 - **Doctor** `Doctor` kind:service avoid: `HealthCheck`
 - **Document Position** `DocumentPosition` kind:value
+- **File Rename Sync** `FileRenameSync` kind:process
 - **Hover** `Hover` kind:query
 - **Hover Info** `HoverInfo` kind:value avoid: `HoverResult`
 - **Install Hint** `InstallHint` kind:concept
@@ -57,6 +59,7 @@ skill: ubiquitous-language
 - **Post-Tool Diagnostics** `PostToolDiagnostics` kind:process avoid: `postToolUseHook`
 - **References** `References` kind:query
 - **Semantic Provider** `SemanticProvider` kind:service avoid: `LspService`, `SemanticLayer`
+- **Server Request** `ServerRequest` kind:concept
 - **Severity** `Severity` kind:value
 - **Source File List Cache** `SourceFileListCache` kind:concept
 - **Source Revision** `SourceRevision` kind:concept avoid: `diagnosticsVersion`
@@ -64,9 +67,11 @@ skill: ubiquitous-language
 - **Supported Language** `SupportedLanguage` kind:concept
 - **Support Level** `SupportLevel` kind:state
 - **Symbol Match** `SymbolMatch` kind:value
+- **Symbol Rename** `SymbolRename` kind:command
 - **Symbols** `Symbols` kind:query avoid: `WorkspaceSymbol`
 - **Timeout Budget** `TimeoutBudget` kind:value avoid: `timeoutMs` (that is Diagnostics Timeout Policy)
 - **Workspace Command Service** `WorkspaceCommandService` kind:service
+- **Workspace Edit** `WorkspaceEdit` kind:value
 - **Workspace Root** `WorkspaceRoot` kind:concept avoid: `projectRoot`
 - **Workspace Seed Files** `WorkspaceSeedFiles` kind:concept
 
@@ -74,9 +79,9 @@ skill: ubiquitous-language
 
 ### Bridge
 
-- **Definition**: The read-only semantic layer between Codex CLI and local language servers; the product itself (`codex-lsp-bridge`, npm package, MCP server).
-- **NOT**: A general-purpose LSP proxy or an editor plugin; it never grants write access.
-- **Related**: Semantic Provider, Post-Tool Diagnostics, Doctor
+- **Definition**: The semantic layer between Codex CLI and local language servers; the product itself (`codex-lsp-bridge`, npm package, MCP server). Reads are unlimited; edits happen only through language-server-defined, bridge-validated Workspace Edits.
+- **NOT**: A general-purpose LSP proxy or an editor plugin; it never applies an edit the language server did not return.
+- **Related**: Semantic Provider, Workspace Edit, Post-Tool Diagnostics, Doctor
 
 ### Bridge Config
 
@@ -86,9 +91,15 @@ skill: ubiquitous-language
 
 ### Command Service
 
-- **Definition**: The validated, read-only facade over one SemanticProvider: each method (`diagnostics`, `definition`, `references`, `symbols`, `hover`, and their `*At` variants) validates inputs (non-empty symbol, 1-based line/character) and delegates to the provider. Despite the name, all methods are queries — "Command" refers to the CLI/MCP tool surface this layer serves; the project is read-only by design.
-- **NOT**: A write-model command bus or an aggregate command handler; nothing here mutates source files.
-- **Related**: Semantic Provider, Workspace Command Service
+- **Definition**: The validated facade over one SemanticProvider: each method (`diagnostics`, `definition`, `references`, `symbols`, `hover`, `rename`, `codeActions`, `willRenameFiles`, and their `*At` variants) validates inputs (non-empty symbol, 1-based line/character) and delegates to the provider. Despite the name, all methods are queries or validated edit commands — "Command" refers to the CLI/MCP tool surface this layer serves.
+- **NOT**: A write-model command bus or an aggregate command handler; nothing here mutates source files directly — edits flow through Workspace Edit.
+- **Related**: Semantic Provider, Workspace Command Service, Workspace Edit
+
+### Code Action
+
+- **Definition**: Command listing and applying language-server code actions (quickfixes, refactors, source actions) for a file range; exposed as the `lsp_code_actions` MCP tool. Two modes: list (returns indexed actions) and apply by index. Command-only actions are executed through an internal `workspace/executeCommand`; the edit itself always flows through the Workspace Edit pipeline.
+- **NOT**: A free-form code generation tool; the bridge applies only what the language server returns. `workspace/executeCommand` is never exposed to the agent as a tool.
+- **Related**: Workspace Edit, Server Request
 
 ### Default Language Servers
 
@@ -156,6 +167,12 @@ skill: ubiquitous-language
 - **NOT**: An LSP protocol `Position` (0-based, no file) or a Location (a result, not an input).
 - **Related**: Location, Definition, References, Hover
 
+### File Rename Sync
+
+- **Definition**: Process keeping language-server state consistent around a file rename performed by the agent: `workspace/willRenameFiles` before the move returns reference updates applied through the Workspace Edit pipeline; `workspace/didRenameFiles` (`notifyFilesRenamed`) after the move updates the server's file-system model. Exposed as the `lsp_will_rename_files` MCP tool; the physical file operation stays with the agent.
+- **NOT**: A file rename tool — the bridge never moves files itself in the minimal version.
+- **Related**: Workspace Edit, Semantic Provider
+
 ### Hover
 
 - **Definition**: Query that returns type/signature information for a symbol name or a Document Position; exposed as the `lsp_hover` MCP tool.
@@ -222,9 +239,15 @@ skill: ubiquitous-language
 
 ### Semantic Provider
 
-- **Definition**: The per-language service interface the Bridge exposes: diagnostics, definition, references, symbols, hover, and dispose (`SemanticProvider`, implemented by `LspSemanticProvider`; registered per language via `SemanticProviderRegistry`).
-- **NOT**: The raw JSON-RPC client (that's LSP Client) or the per-call façade (CommandService, see Unresolved).
-- **Related**: LSP Client, Language Server, Workspace Seed Files, Workspace Root
+- **Definition**: The per-language service interface the Bridge exposes: diagnostics, definition, references, symbols, hover, symbol rename, code actions, file rename sync, and dispose (`SemanticProvider`, implemented by `LspSemanticProvider`; registered per language via `SemanticProviderRegistry`).
+- **NOT**: The raw JSON-RPC client (that's LSP Client) or the per-call façade (Command Service).
+- **Related**: LSP Client, Language Server, Workspace Seed Files, Workspace Root, Workspace Edit
+
+### Server Request
+
+- **Definition**: A JSON-RPC request from the language server to the bridge (server → bridge direction), e.g. `workspace/applyEdit`, `workspace/configuration`, `client/registerCapability`. The bridge must answer every server request; unanswered ones hang the server. Server-initiated `workspace/applyEdit` is routed into the same Workspace Edit pipeline as tool-initiated edits.
+- **NOT**: A bridge-to-server request (that's the ordinary client request path).
+- **Related**: LSP Client, Workspace Edit
 
 ### Severity
 
@@ -266,6 +289,12 @@ skill: ubiquitous-language
 - **NOT**: A raw LSP protocol symbol (internal `LspSymbol`) or the symbol-name resolution step (`resolveSingleSymbol`).
 - **Related**: Symbols, Location
 
+### Symbol Rename
+
+- **Definition**: Command renaming a symbol at a Document Position across the workspace via `textDocument/prepareRename` (when supported) → `textDocument/rename` → Workspace Edit pipeline; exposed as the `lsp_rename` MCP tool. The result reports the old symbol, new name, changed files, and edit count.
+- **NOT**: A text search-and-replace; the language server computes every occurrence. The agent never applies the returned edit manually.
+- **Related**: Workspace Edit, Document Position, References
+
 ### Symbols
 
 - **Definition**: Query that searches workspace symbols by name via `workspace/symbol`; exposed as the `lsp_symbols` MCP tool, returning Symbol Matches.
@@ -282,6 +311,12 @@ skill: ubiquitous-language
 - **Definition**: The language-routing Command Service (`WorkspaceCommandService`): holds a `SemanticProviderRegistry` (LSP Provider Registry) plus a default language from Bridge Config, and picks the provider per call — by the `uri`/`file` argument when present, otherwise the default language. The layer every MCP tool, CLI command, and the post-tool-diagnostics hook ultimately calls.
 - **NOT**: A registry itself (it delegates provider lookup); the CLI entry point composes one per workspace root.
 - **Related**: Command Service, LSP Provider Registry, Bridge Config
+
+### Workspace Edit
+
+- **Definition**: The only carrier of changes in the bridge: an edit structure returned by a language server (`changes` / `documentChanges` with TextDocumentEdit, CreateFile, RenameFile, DeleteFile), normalized to absolute paths, validated (inside Workspace Root, non-overlapping ranges, version match), previewed, and applied by the single `applyWorkspaceEdit` pipeline (`src/core/workspace-edit.ts`).
+- **NOT**: An MCP tool — never exposed to the agent; agent-side manual reproduction of a returned edit is forbidden by the safety contract.
+- **Related**: Symbol Rename, Code Action, File Rename Sync, Server Request, Workspace Root
 
 ### Workspace Root
 
