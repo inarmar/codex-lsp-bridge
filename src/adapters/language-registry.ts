@@ -47,7 +47,7 @@ export class LanguageRegistry {
   private readonly descriptors = new Map<string, LanguageDescriptor>();
   private readonly extensionOwners = new Map<string, string>();
 
-  static fromLanguageServers(entries: Record<string, LanguageServerEntry>): LanguageRegistry {
+  static fromLanguageServers(entries: Record<string, unknown>): LanguageRegistry {
     const registry = new LanguageRegistry();
     for (const [language, entry] of Object.entries(entries ?? {})) {
       registry.add(language, entry);
@@ -84,7 +84,7 @@ export class LanguageRegistry {
     return [...new Set([...this.descriptors.values()].flatMap((descriptor) => descriptor.extensions))];
   }
 
-  private add(language: string, entry: LanguageServerEntry): void {
+  private add(language: string, entry: unknown): void {
     const normalized = normalizeDescriptor(language, entry);
     if (typeof normalized === "string") {
       throw new Error(normalized);
@@ -98,46 +98,47 @@ export class LanguageRegistry {
   }
 }
 
-function normalizeDescriptor(language: string, entry: LanguageServerEntry): LanguageDescriptor | string {
+function normalizeDescriptor(language: string, entry: unknown): LanguageDescriptor | string {
   if (!entry || typeof entry !== "object") return `languageServers.${language}: expected an object`;
+  const record = entry as Record<string, unknown>;
   const problems: string[] = [];
 
-  const command = readNonEmptyString(entry.command);
+  const command = readNonEmptyString(record.command);
   if (!command) {
-    problems.push(entry.command === undefined ? `missing required field 'command'` : `field 'command' must be a non-empty string`);
+    problems.push(record.command === undefined ? `missing required field 'command'` : `field 'command' must be a non-empty string`);
   }
 
-  const extensions = readExtensions(entry.extensions);
+  const extensions = readExtensions(record.extensions);
   if (!extensions) {
-    problems.push(entry.extensions === undefined ? `missing required field 'extensions'` : `field 'extensions' must be a non-empty array of extensions starting with '.'`);
+    problems.push(record.extensions === undefined ? `missing required field 'extensions'` : `field 'extensions' must be a non-empty array of extensions starting with '.'`);
   }
 
-  if (entry.languageId !== undefined && !readNonEmptyString(entry.languageId)) {
+  if (record.languageId !== undefined && !readNonEmptyString(record.languageId)) {
     problems.push(`field 'languageId' must be a non-empty string`);
   }
-  if (entry.args !== undefined && !readStringArray(entry.args)) {
+  if (record.args !== undefined && !readStringArray(record.args)) {
     problems.push(`field 'args' must be an array of strings`);
   }
-  if (entry.workspaceSeedFiles !== undefined && !readStringArray(entry.workspaceSeedFiles)) {
+  if (record.workspaceSeedFiles !== undefined && !readStringArray(record.workspaceSeedFiles)) {
     problems.push(`field 'workspaceSeedFiles' must be an array of strings`);
   }
-  if (entry.installHint !== undefined && !readNonEmptyString(entry.installHint)) {
+  if (record.installHint !== undefined && !readNonEmptyString(record.installHint)) {
     problems.push(`field 'installHint' must be a non-empty string`);
   }
-  if (entry.supportLevel !== undefined && entry.supportLevel !== "primary" && entry.supportLevel !== "experimental") {
+  if (record.supportLevel !== undefined && record.supportLevel !== "primary" && record.supportLevel !== "experimental") {
     problems.push(`field 'supportLevel' must be "primary" or "experimental"`);
   }
 
   if (problems.length > 0) return `languageServers.${language}: ${problems.join("; ")}`;
 
   return {
-    languageId: readNonEmptyString(entry.languageId) ?? language,
+    languageId: readNonEmptyString(record.languageId) ?? language,
     command: command!,
-    args: readStringArray(entry.args) ?? [],
+    args: readStringArray(record.args) ?? [],
     extensions: extensions!,
-    workspaceSeedFiles: readStringArray(entry.workspaceSeedFiles) ?? [],
-    installHint: readNonEmptyString(entry.installHint) ?? `install "${command}" and make sure it is available on PATH`,
-    supportLevel: entry.supportLevel === "primary" ? "primary" : "experimental"
+    workspaceSeedFiles: readStringArray(record.workspaceSeedFiles) ?? [],
+    installHint: readNonEmptyString(record.installHint) ?? `install "${command}" and make sure it is available on PATH`,
+    supportLevel: record.supportLevel === "primary" ? "primary" : "experimental"
   };
 }
 
