@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add validated semantic editing commands: `lsp_rename`, `lsp_code_actions`, and
+  `lsp_will_rename_files`. All server-returned changes pass through the central
+  `WorkspaceEdit` normalize/validate/apply pipeline; Codex remains responsible
+  for the physical file move.
+- Add bidirectional JSON-RPC server-request handling and synchronization for
+  server-initiated `workspace/applyEdit`.
 - Languages are now configured, not hardcoded: define any language server with a
   `languageServers` entry in `lsp-client.json` (`command` + `extensions` required,
   `languageId`, `args`, `workspaceSeedFiles`, `installHint`, `supportLevel` optional).

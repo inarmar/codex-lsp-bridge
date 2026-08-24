@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CommandService, WorkspaceCommandService } from "../src/core/command-service.js";
-import type { DiagnosticReport, HoverInfo, Location, RenameSummary, SemanticProvider, SymbolMatch } from "../src/core/types.js";
+import type { CodeActionResult, DiagnosticReport, FileRenameSummary, HoverInfo, Location, RenameSummary, SemanticProvider, SymbolMatch } from "../src/core/types.js";
 import { filePathToUri } from "../src/utils/uri.js";
 
 class FakeProvider implements SemanticProvider {
@@ -61,6 +61,18 @@ class FakeProvider implements SemanticProvider {
       deletedFiles: [],
       editCount: 1
     });
+  }
+
+  codeActions(): Promise<CodeActionResult> {
+    return Promise.resolve({ actions: [] });
+  }
+
+  willRenameFiles(oldPath: string, newPath: string, renamed = false): Promise<FileRenameSummary> {
+    return Promise.resolve({ oldPath, newPath, renamed, changedFiles: [], createdFiles: [], renamedFiles: [], deletedFiles: [], editCount: 0 });
+  }
+
+  notifyFilesRenamed(oldPath: string, newPath: string): Promise<FileRenameSummary> {
+    return this.willRenameFiles(oldPath, newPath, true);
   }
 
   dispose(): Promise<void> {

@@ -1,6 +1,6 @@
 ---
 name: lsp
-description: Use codex-lsp-bridge for read-only semantic diagnostics, definitions, references, symbols, hover, and status checks.
+description: Use codex-lsp-bridge for semantic diagnostics, navigation, hover, validated LSP edits, and status checks.
 ---
 
 # codex-lsp-bridge
@@ -11,7 +11,14 @@ Use the `codex-lsp-bridge` MCP tools as a semantic feedback layer for code work.
   fixed list: TypeScript, Rust, Python, Go, Svelte by default, and any language
   added via a `languageServers` config entry. Run `codex-lsp-bridge languages
   --root .` or `lsp_status` to see what is configured.
-- Prefer `lsp_diagnostics` after editing supported source files.
+- Semantic reads are broad. Writes are allowed only through language-server-
+  defined, bridge-validated `WorkspaceEdit` values. Codex must not reproduce or
+  apply a returned edit manually.
+- Use `lsp_rename` for symbol renames, `lsp_code_actions` for listing/applying
+  quickfixes or refactors, and `lsp_will_rename_files` around a physical file
+  move. The bridge does not perform the physical move in the minimal contract.
+- After every semantic write, call `lsp_diagnostics`. Treat timed out or stale
+  diagnostics as inconclusive, not clean.
 - During code review, audit, or investigation workflows, call `lsp_diagnostics` for changed supported files or the smallest representative set before final findings.
 - For large TypeScript workspaces, use file diagnostics `timeoutMs` when the default wait is too short. Do not pass `timeoutBudgetMs` for file diagnostics; it is directory-only.
 - Avoid broad directory diagnostics by default. If a directory scan is needed, keep `maxFiles`, `timeoutBudgetMs`, and `concurrency` bounded and report `directory.truncated` or `directory.budgetTimedOut` when present.

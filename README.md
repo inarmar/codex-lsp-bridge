@@ -4,13 +4,15 @@
 [![CI](https://github.com/shjeon-96/codex-lsp-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/shjeon-96/codex-lsp-bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Read-only LSP tools for Codex CLI, with TypeScript as the primary path and
-experimental Rust, Python, Go, and Svelte support through local language
+Validated semantic LSP tools for Codex CLI, with TypeScript as the primary path
+and experimental Rust, Python, Go, and Svelte support through local language
 servers. Any other language can be added with one config entry.
 
-`codex-lsp-bridge` gives Codex semantic signals from your local language
-servers — diagnostics, definitions, references, symbols, hover, and status —
-without granting write access or escaping the workspace root.
+Semantic reads remain available without restriction; writes happen only through
+language-server-defined, bridge-validated `WorkspaceEdit` values. The bridge
+provides diagnostics, definitions, references, symbols, hover, rename, code
+actions, and file-rename synchronization without allowing edits outside the
+workspace root.
 
 It is meant to be a semantic safety layer for AI coding workflows across
 supported languages:
@@ -18,14 +20,19 @@ supported languages:
 - understand type and semantic diagnostics after edits
 - navigate definitions and references without guessing from grep alone
 - inspect hover/type information at known file positions
-- keep review and refactor loops read-only by default
+- use validated semantic edits for rename, code actions, and file-rename
+  synchronization; the language server computes the edit and the bridge
+  validates and applies it
+- keep review and refactor loops explicit: after every semantic write, call
+  `lsp_diagnostics`
 
 ## Why Use It
 
 AI coding agents are good at text search, but semantic mistakes still happen:
 wrong imports, missed references, stale type assumptions, and edits made before
-diagnostics are known. `codex-lsp-bridge` gives Codex a read-only semantic
-feedback layer from the same language servers your editor uses.
+diagnostics are known. `codex-lsp-bridge` gives Codex a semantic feedback layer
+from the same language servers your editor uses. Reads remain broad; writes are
+limited to validated server-returned WorkspaceEdits.
 
 Typical loop:
 
@@ -108,11 +115,31 @@ restart, Codex can call:
 - `lsp_references`
 - `lsp_symbols`
 - `lsp_hover`
+- `lsp_rename`
+- `lsp_code_actions`
+- `lsp_will_rename_files`
+
+## Editing Commands
+
+Editing commands are deliberately narrow. The language server returns the
+semantic `WorkspaceEdit`; the bridge normalizes, validates workspace bounds,
+versions, ranges, and file-operation preconditions, then applies it. Codex must
+not reproduce or apply returned edits manually.
+
+- `lsp_rename`: rename a symbol at a file position.
+- `lsp_code_actions`: list actions or apply one by zero-based index.
+- `lsp_will_rename_files`: request import updates before a physical move, then
+  call again with `renamed: true` after Codex performs that move.
+
+After each write, call `lsp_diagnostics`.
 
 ## What Codex Gets
 
-- Read-only diagnostics with `status`, `timedOut`, `stale`, and
+- Semantic diagnostics with `status`, `timedOut`, `stale`, and
   `sourceRevision` metadata.
+- Validated LSP edits for rename, code actions, and file-rename synchronization.
+- `WorkspaceEdit` root, version, overlap, and file-operation validation before
+  any write.
 - Definition, references, symbols, and hover from local language servers.
 - Position-based lookup for precise navigation when file/line/character is
   known.
@@ -125,13 +152,11 @@ restart, Codex can call:
 
 The MVP is intentionally narrow and ready for local always-on use.
 
-- Read-only first
-- TypeScript remains the primary path
-- Rust adapter and hook coverage are supported experimentally
-- Python and Go adapters are present but less exercised
+- Semantic edits are accepted only from server-returned WorkspaceEdits.
+- Physical file moves remain Codex's responsibility in the minimal file-rename
+  contract.
 - No broad automatic language server installation; `--with-rust-analyzer` is a
   narrow explicit Rust setup helper
-- No rename/code-action support yet
 
 ## Requirements
 

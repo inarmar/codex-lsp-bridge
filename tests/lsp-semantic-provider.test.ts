@@ -20,6 +20,9 @@ class FakeClient extends EventEmitter implements LspClient {
   prepareRenameResult: unknown = { range: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } }, placeholder: "Editor" };
   prepareRenameUnsupported = false;
   renameResult: unknown = null;
+  codeActionResult: unknown = [];
+  codeActionResolveResult: unknown = null;
+  willRenameResult: unknown = null;
   stopped = false;
   onNotify?: (method: string, params?: unknown) => void;
 
@@ -36,6 +39,9 @@ class FakeClient extends EventEmitter implements LspClient {
       return Promise.resolve(this.prepareRenameResult as T);
     }
     if (method === "textDocument/rename") return Promise.resolve(this.renameResult as T);
+    if (method === "textDocument/codeAction") return Promise.resolve(this.codeActionResult as T);
+    if (method === "codeAction/resolve") return Promise.resolve(this.codeActionResolveResult as T);
+    if (method === "workspace/willRenameFiles") return Promise.resolve(this.willRenameResult as T);
     return Promise.resolve({} as T);
   }
 
@@ -367,6 +373,80 @@ describe("LspSemanticProvider", () => {
       newName: "Renamed",
       editCount: 0
     });
+  });
+
+  it("lists and applies a code action through WorkspaceEdit", async () => {
+    const provider = createProvider();
+    const uri = filePathToUri(await fs.realpath(filePath));
+    client.codeActionResult = [
+      {
+        title: "Rename Editor",
+        kind: "refactor.rename",
+        isPreferred: true,
+        edit: {
+          changes: {
+            [uri]: [
+              {
+                range: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } },
+                newText: "Renamed"
+              }
+            ]
+          }
+        }
+      }
+    ];
+
+    const listed = await provider.codeActions(
+      filePath,
+      { start: { line: 1, character: 14 }, end: { line: 1, character: 14 } },
+      ["refactor"]
+    );
+    expect(listed.actions).toEqual([
+      { index: 0, title: "Rename Editor", kind: "refactor.rename", isPreferred: true, hasEdit: true, hasCommand: false }
+    ]);
+    const applied = await provider.codeActions(
+      filePath,
+      { start: { line: 1, character: 14 }, end: { line: 1, character: 14 } },
+      ["refactor"],
+      0
+    );
+    expect(applied.applied).toMatchObject({ index: 0, title: "Rename Editor", editCount: 1, commandExecuted: false });
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("export const Renamed = 1;\n");
+  });
+
+  it("resolves and executes a command-only code action", async () => {
+    const provider = createProvider();
+    client.codeActionResult = [{ title: "Organize imports", data: { id: 1 } }];
+    client.codeActionResolveResult = { title: "Organize imports", command: { command: "organize.imports", arguments: ["x"] } };
+
+    const result = await provider.codeActions(
+      filePath,
+      { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } },
+      undefined,
+      0
+    );
+
+    expect(result.applied).toMatchObject({ title: "Organize imports", commandExecuted: true, editCount: 0 });
+    expect(client.requests.map(({ method }) => method)).toContain("workspace/executeCommand");
+  });
+
+  it("requests semantic edits before a file move and synchronizes the move after Codex performs it", async () => {
+    const provider = createProvider();
+    const newPath = path.join(rootPath, "src", "renamed-editor.ts");
+    client.willRenameResult = { changes: {} };
+
+    const before = await provider.willRenameFiles(filePath, newPath);
+    expect(before).toMatchObject({ oldPath: await fs.realpath(filePath), newPath, renamed: false, editCount: 0 });
+    expect(client.requests.at(-1)?.method).toBe("workspace/willRenameFiles");
+
+    await provider.diagnostics(filePathToUri(filePath), { timeoutMs: 20 }).catch(() => undefined);
+    await fs.rename(filePath, newPath);
+    const after = await provider.notifyFilesRenamed(filePath, newPath);
+
+    expect(after).toMatchObject({ oldPath: filePath, newPath, renamed: true });
+    expect(client.notifications.map(({ method }) => method)).toContain("workspace/didRenameFiles");
+    expect(client.notifications.map(({ method }) => method)).toContain("textDocument/didClose");
+    expect(client.notifications.map(({ method }) => method)).toContain("textDocument/didOpen");
   });
 
   it("applies server-pushed workspace/applyEdit through the pipeline and syncs open documents", async () => {

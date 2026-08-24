@@ -158,6 +158,34 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(await service.hover(requireValue(command, value)), null, 2));
       return;
     }
+    if (command === "code-actions") {
+      const file = readOption(args, "--file");
+      if (!file) throw new Error("code-actions requires --file");
+      const line = readPositiveCoordinateOption(args, "--line", 1);
+      const character = readPositiveCoordinateOption(args, "--character", 1);
+      const endLine = readPositiveCoordinateOption(args, "--end-line", line);
+      const endCharacter = readPositiveCoordinateOption(args, "--end-character", character);
+      const onlyValue = readOption(args, "--only");
+      const only = onlyValue ? onlyValue.split(",").map((kind) => kind.trim()).filter(Boolean) : undefined;
+      const apply = readOptionalNonNegativeIntegerOption(args, "--apply");
+      console.log(JSON.stringify(await service.codeActions(file, {
+        start: { line, character },
+        end: { line: endLine, character: endCharacter }
+      }, only, apply), null, 2));
+      return;
+    }
+    if (command === "will-rename-files") {
+      const oldPath = readOption(args, "--old-path");
+      const newPath = readOption(args, "--new-path");
+      if (!oldPath || !newPath) throw new Error("will-rename-files requires --old-path and --new-path");
+      const renamedValue = readOption(args, "--renamed");
+      const renamed = renamedValue === undefined ? false : renamedValue === "true";
+      if (renamedValue !== undefined && renamedValue !== "true" && renamedValue !== "false") {
+        throw new Error("--renamed must be true or false");
+      }
+      console.log(JSON.stringify(await service.willRenameFiles(oldPath, newPath, renamed), null, 2));
+      return;
+    }
     if (command === "rename") {
       const position = readPosition(args);
       if (!position) throw new Error("rename requires --file, --line, and --character");
@@ -233,6 +261,8 @@ function printUsage(stream: "stdout" | "stderr", languages: string[]): void {
   codex-lsp-bridge symbols <query> ${languageOptions} [--root path]
   codex-lsp-bridge hover <symbol> ${languageOptions} [--root path]
   codex-lsp-bridge hover --file path --line n --character n ${languageOptions} [--root path]
+  codex-lsp-bridge code-actions --file path [--line n --character n] [--end-line n --end-character n] [--only kind[,kind]] [--apply n] ${languageOptions} [--root path]
+  codex-lsp-bridge will-rename-files --old-path path --new-path path [--renamed true|false] ${languageOptions} [--root path]
   codex-lsp-bridge rename --file path --line n --character n --new-name name ${languageOptions} [--root path]
   codex-lsp-bridge mcp [--root path] ${languageOptions}`;
   if (stream === "stdout") {
@@ -248,6 +278,20 @@ function readDirectoryDiagnosticsOptions(args: string[]): DirectoryDiagnosticsOp
     timeoutBudgetMs: readPositiveIntegerOption(args, "--timeout-budget-ms", defaultDirectoryDiagnosticsOptions.timeoutBudgetMs),
     concurrency: readPositiveIntegerOption(args, "--concurrency", defaultDirectoryDiagnosticsOptions.concurrency)
   };
+}
+
+function readPositiveCoordinateOption(args: string[], option: string, fallback: number): number {
+  const value = readNumberOption(args, option);
+  if (value === undefined) return fallback;
+  if (value < 1) throw new Error(`${option} must be a positive integer`);
+  return value;
+}
+
+function readOptionalNonNegativeIntegerOption(args: string[], option: string): number | undefined {
+  const value = readNumberOption(args, option);
+  if (value === undefined) return undefined;
+  if (value < 0) throw new Error(`${option} must be a non-negative integer`);
+  return value;
 }
 
 function readPositiveIntegerOption(args: string[], option: string, fallback: number): number {

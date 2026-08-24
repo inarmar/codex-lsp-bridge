@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { LspClient, ServerProcessConfig } from "./json-rpc-lsp-client.js";
 import { lspSeverityToText } from "./diagnostics.js";
-import type { Diagnostic, DiagnosticOptions, DiagnosticReport, DocumentPosition, HoverInfo, Location, Position, RenameSummary, SemanticProvider, SymbolMatch } from "./types.js";
+import type { CodeActionItem, CodeActionResult, Diagnostic, DiagnosticOptions, DiagnosticReport, DocumentPosition, FileRenameSummary, HoverInfo, Location, Position, Range, RenameSummary, SemanticProvider, SymbolMatch } from "./types.js";
 import {
   applyWorkspaceEdit as applyEdit,
   normalizeWorkspaceEdit,
@@ -39,6 +39,21 @@ interface LspHover {
 interface LspPrepareRename {
   range: { start: Position; end: Position };
   placeholder?: string;
+}
+
+interface LspCommand {
+  title?: string;
+  command: string;
+  arguments?: unknown[];
+}
+
+interface LspCodeAction {
+  title: string;
+  kind?: string;
+  isPreferred?: boolean;
+  edit?: unknown;
+  command?: LspCommand;
+  data?: unknown;
 }
 
 const defaultDiagnosticsTimeoutMs = 15000;
@@ -241,6 +256,123 @@ export class LspSemanticProvider implements SemanticProvider {
       renamedFiles: result.renamedFiles,
       deletedFiles: result.deletedFiles,
       editCount: result.textEditCount
+    };
+  }
+
+  async codeActions(file: string, range: Range, only?: string[], apply?: number): Promise<CodeActionResult> {
+    const document = await this.openOrUpdateDocument(filePathToUri(file));
+    const result = await this.client.request<unknown>("textDocument/codeAction", {
+      textDocument: { uri: document.uri },
+      range: {
+        start: toLspPosition(range.start),
+        end: toLspPosition(range.end)
+      },
+      context: {
+        diagnostics: [],
+        ...(only && only.length > 0 ? { only } : {})
+      }
+    });
+    const rawActions = Array.isArray(result) ? result : [];
+    const actions = rawActions.map((raw, index) => summarizeCodeAction(raw, index));
+    if (apply === undefined) return { actions };
+    if (!Number.isInteger(apply) || apply < 0 || apply >= rawActions.length) {
+      throw new Error(`Code action index ${apply} is out of range`);
+    }
+
+    let action = rawActions[apply];
+    if (isCodeAction(action) && action.data !== undefined && action.edit === undefined && action.command === undefined) {
+      action = await this.client.request<unknown>("codeAction/resolve", action);
+    }
+    const selected = isCodeAction(action) ? action : undefined;
+    const command = isLspCommand(action) ? action : selected?.command;
+    if (!selected && !command) {
+      throw new Error(`Code action ${apply} is not executable`);
+    }
+    let editResult: WorkspaceEditResult = {
+      applied: true,
+      changedFiles: [],
+      createdFiles: [],
+      renamedFiles: [],
+      deletedFiles: [],
+      textEditCount: 0
+    };
+    if (selected?.edit !== undefined) {
+      editResult = await this.applyWorkspaceEdit(selected.edit);
+      if (!editResult.applied) throw new Error(editResult.failure ?? "Applying the code action failed");
+    }
+    if (command) {
+      await this.client.request("workspace/executeCommand", {
+        command: command.command,
+        arguments: command.arguments
+      });
+    }
+
+    return {
+      actions,
+      applied: {
+        index: apply,
+        title: codeActionTitle(action, apply),
+        changedFiles: editResult.changedFiles,
+        createdFiles: editResult.createdFiles,
+        renamedFiles: editResult.renamedFiles,
+        deletedFiles: editResult.deletedFiles,
+        editCount: editResult.textEditCount,
+        commandExecuted: command !== undefined
+      }
+    };
+  }
+
+  async willRenameFiles(oldPath: string, newPath: string): Promise<FileRenameSummary> {
+    const oldDocument = await this.resolveDocument(filePathToUri(oldPath));
+    const targetPath = await this.resolveWorkspaceTarget(newPath);
+    const rawEdit = await this.client.request<unknown | null>("workspace/willRenameFiles", {
+      files: [{ oldUri: oldDocument.uri, newUri: filePathToUri(targetPath) }]
+    });
+    const result = rawEdit === null ? emptyWorkspaceEditResult() : await this.applyWorkspaceEdit(rawEdit);
+    if (!result.applied) throw new Error(result.failure ?? "Applying file rename edits failed");
+    return {
+      oldPath: oldDocument.filePath,
+      newPath: targetPath,
+      renamed: false,
+      changedFiles: result.changedFiles,
+      createdFiles: result.createdFiles,
+      renamedFiles: result.renamedFiles,
+      deletedFiles: result.deletedFiles,
+      editCount: result.textEditCount
+    };
+  }
+
+  async notifyFilesRenamed(oldPath: string, newPath: string): Promise<FileRenameSummary> {
+    await this.ensureInitialized();
+    const oldTarget = await this.resolveWorkspaceTarget(oldPath);
+    const newTarget = await this.resolveWorkspaceTarget(newPath);
+    const oldUri = filePathToUri(oldTarget);
+    const newUri = filePathToUri(newTarget);
+
+    this.client.notify("workspace/didRenameFiles", {
+      files: [{ oldUri, newUri }]
+    });
+    const opened = this.openedDocumentsByUri.get(oldUri);
+    if (opened) {
+      this.client.notify("textDocument/didClose", { textDocument: { uri: oldUri } });
+      this.openedDocumentsByUri.delete(oldUri);
+      if (await fileExists(newTarget)) {
+        const text = await fs.readFile(newTarget, "utf8");
+        this.openedDocumentsByUri.set(newUri, { text, version: opened.version });
+        this.client.notify("textDocument/didOpen", {
+          textDocument: { uri: newUri, languageId: this.options.languageId, version: opened.version, text }
+        });
+      }
+    }
+    return {
+      oldPath: oldTarget,
+      newPath: newTarget,
+      renamed: true,
+      changedFiles: [],
+      createdFiles: [],
+      renamedFiles: [{ from: oldTarget, to: newTarget }],
+      deletedFiles: [],
+      editCount: 0
     };
   }
 
@@ -528,6 +660,26 @@ export class LspSemanticProvider implements SemanticProvider {
     });
   }
 
+  private async resolveWorkspaceTarget(filePath: string): Promise<string> {
+    const targetPath = path.resolve(filePath);
+    const rootRealPath = await this.rootRealPathPromise;
+    if (!isInsideRoot(targetPath, rootRealPath)) {
+      throw new Error(`File is outside workspace root: ${filePath}`);
+    }
+
+    const parentPath = path.dirname(targetPath);
+    const parentRealPath = await fs.realpath(parentPath).catch(() => undefined);
+    if (!parentRealPath || !isInsideRoot(parentRealPath, rootRealPath)) {
+      throw new Error(`File is outside workspace root: ${filePath}`);
+    }
+    if (await fileExists(targetPath)) {
+      const realTargetPath = await fs.realpath(targetPath);
+      if (!isInsideRoot(realTargetPath, rootRealPath)) {
+        throw new Error(`File is outside workspace root: ${filePath}`);
+      }
+    }
+    return targetPath;
+  }
   private async resolveDocument(uri: string): Promise<{ uri: string; filePath: string }> {
     const inputPath = path.resolve(uriToFilePath(uri));
     let realFilePath: string;
@@ -581,6 +733,50 @@ export class LspSemanticProvider implements SemanticProvider {
   }
 }
 
+function emptyWorkspaceEditResult(): WorkspaceEditResult {
+  return {
+    applied: true,
+    changedFiles: [],
+    createdFiles: [],
+    renamedFiles: [],
+    deletedFiles: [],
+    textEditCount: 0
+  };
+}
+function summarizeCodeAction(raw: unknown, index: number): CodeActionItem {
+  if (isCodeAction(raw)) {
+    return {
+      index,
+      title: raw.title,
+      ...(raw.kind ? { kind: raw.kind } : {}),
+      ...(raw.isPreferred !== undefined ? { isPreferred: raw.isPreferred } : {}),
+      hasEdit: raw.edit !== undefined,
+      hasCommand: raw.command !== undefined
+    };
+  }
+  if (isLspCommand(raw)) {
+    return { index, title: raw.title ?? raw.command, hasEdit: false, hasCommand: true };
+  }
+  return { index, title: `Code action ${index}`, hasEdit: false, hasCommand: false };
+}
+
+function isCodeAction(value: unknown): value is LspCodeAction {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.title === "string" && (candidate.command === undefined || typeof candidate.command === "object");
+}
+
+function isLspCommand(value: unknown): value is LspCommand {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.command === "string";
+}
+
+function codeActionTitle(value: unknown, index: number): string {
+  if (isCodeAction(value)) return value.title;
+  if (isLspCommand(value)) return value.title ?? value.command;
+  return `Code action ${index}`;
+}
 function normalizeHoverContents(contents: LspHover["contents"]): string {
   if (typeof contents === "string") return contents;
   if (Array.isArray(contents)) {
@@ -599,7 +795,7 @@ function isMissingLanguageServerError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith("Failed to start LSP server");
 }
 
-function toLspPosition(position: DocumentPosition): Position {
+function toLspPosition(position: { line: number; character: number }): Position {
   return {
     line: position.line - 1,
     character: position.character - 1

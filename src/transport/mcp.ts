@@ -167,6 +167,52 @@ const tools = [
     }
   },
   {
+    name: "lsp_code_actions",
+    description: "List code actions or apply one selected action. The language server supplies the action and the bridge validates and applies its WorkspaceEdit; command-only actions are executed internally.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        file: { type: "string", description: "File at which to request code actions." },
+        line: { type: "number", description: "1-based start line; defaults to 1." },
+        character: { type: "number", description: "1-based start character; defaults to 1." },
+        end_line: { type: "number", description: "Optional 1-based end line." },
+        end_character: { type: "number", description: "Optional 1-based end character." },
+        only: { type: "array", items: { type: "string" }, description: "Optional LSP CodeActionKind filters." },
+        apply: { type: "number", description: "Optional zero-based action index to apply." },
+        root: { type: "string", description: "Optional workspace root for detached worktrees." }
+      },
+      required: ["file"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "lsp_will_rename_files",
+    description: "Request semantic import/reference updates before a physical file move, or notify the server after Codex has moved it. Codex remains responsible for the physical move.",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false
+    },
+    inputSchema: {
+      type: "object",
+      properties: {
+        old_path: { type: "string", description: "Current file path." },
+        new_path: { type: "string", description: "Destination file path." },
+        renamed: { type: "boolean", description: "Set true after Codex has physically moved the file." },
+        root: { type: "string", description: "Optional workspace root for detached worktrees." }
+      },
+      required: ["old_path", "new_path"],
+      additionalProperties: false
+    }
+  },
+  {
     name: "lsp_status",
     description: "Return codex-lsp-bridge status, language server availability, Codex install state, and build freshness.",
     annotations: {
@@ -333,6 +379,17 @@ async function callTool(service: LspCommandService, params: Record<string, unkno
   if (name === "lsp_rename") {
     return scopedService.rename(readRequiredPosition(args), readStringParam(args, "new_name"));
   }
+  if (name === "lsp_code_actions") {
+    const file = readStringParam(args, "file");
+    return scopedService.codeActions(file, readCodeActionRange(args), readOnlyKinds(args), readOptionalNonNegativeInteger(args, "apply"));
+  }
+  if (name === "lsp_will_rename_files") {
+    return scopedService.willRenameFiles(
+      readStringParam(args, "old_path"),
+      readStringParam(args, "new_path"),
+      readOptionalBoolean(args, "renamed", false)
+    );
+  }
   if (name === "lsp_status") return runtime.status ? runtime.status() : { status: "unavailable" };
 
   throw new JsonRpcError(-32601, `Unsupported tool: ${name}`);
@@ -353,6 +410,52 @@ function readOptionalPositiveNumber(params: Record<string, unknown>, key: string
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     throw new JsonRpcError(-32602, `${key} parameter must be a positive number`);
+  }
+  return value;
+}
+
+function readOptionalNonNegativeInteger(params: Record<string, unknown>, key: string): number | undefined {
+  const value = params[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new JsonRpcError(-32602, `${key} parameter must be a non-negative integer`);
+  }
+  return value;
+}
+
+function readOnlyKinds(params: Record<string, unknown>): string[] | undefined {
+  const value = params.only;
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new JsonRpcError(-32602, "only parameter must be an array of strings");
+  }
+  return value as string[];
+}
+
+function readOptionalBoolean(params: Record<string, unknown>, key: string, defaultValue: boolean): boolean {
+  const value = params[key];
+  if (value === undefined) return defaultValue;
+  if (typeof value !== "boolean") throw new JsonRpcError(-32602, `${key} parameter must be a boolean`);
+  return value;
+}
+
+function readCodeActionRange(params: Record<string, unknown>): { start: { line: number; character: number }; end: { line: number; character: number } } {
+  const line = readPositiveIntegerOrDefault(params, "line", 1);
+  const character = readPositiveIntegerOrDefault(params, "character", 1);
+  const endLine = readPositiveIntegerOrDefault(params, "end_line", line);
+  const endCharacter = readPositiveIntegerOrDefault(params, "end_character", character);
+
+  return {
+    start: { line, character },
+    end: { line: endLine, character: endCharacter }
+  };
+}
+
+function readPositiveIntegerOrDefault(params: Record<string, unknown>, key: string, defaultValue: number): number {
+  const value = params[key];
+  if (value === undefined) return defaultValue;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new JsonRpcError(-32602, `${key} parameter must be a positive integer`);
   }
   return value;
 }

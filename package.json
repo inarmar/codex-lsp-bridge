@@ -1,7 +1,7 @@
 {
   "name": "codex-lsp-bridge",
   "version": "0.3.3",
-  "description": "Read-only LSP tools for Codex CLI.",
+  "description": "Read-only LSP tools + validated semantic edits for Codex CLI.",
   "license": "MIT",
   "author": "codex-lsp-bridge contributors",
   "repository": {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { dispatch, handleJsonRpcLine, handleRequest } from "../src/transport/mcp.js";
 import { CommandService } from "../src/core/command-service.js";
-import type { DiagnosticReport, HoverInfo, Location, RenameSummary, SemanticProvider, SymbolMatch } from "../src/core/types.js";
+import type { CodeActionResult, DiagnosticReport, FileRenameSummary, HoverInfo, Location, RenameSummary, SemanticProvider, SymbolMatch } from "../src/core/types.js";
 
 class EmptyProvider implements SemanticProvider {
   constructor(private readonly label = "default") {}
@@ -58,6 +58,15 @@ class EmptyProvider implements SemanticProvider {
       editCount: 1
     });
   }
+  codeActions(): Promise<CodeActionResult> {
+    return Promise.resolve({ actions: [] });
+  }
+  willRenameFiles(oldPath: string, newPath: string, renamed = false): Promise<FileRenameSummary> {
+    return Promise.resolve({ oldPath, newPath, renamed, changedFiles: [], createdFiles: [], renamedFiles: [], deletedFiles: [], editCount: 0 });
+  }
+  notifyFilesRenamed(oldPath: string, newPath: string): Promise<FileRenameSummary> {
+    return this.willRenameFiles(oldPath, newPath, true);
+  }
   dispose(): Promise<void> {
     return Promise.resolve();
   }
@@ -81,6 +90,9 @@ describe("MCP dispatch", () => {
         expect.objectContaining({ name: "lsp_references" }),
         expect.objectContaining({ name: "lsp_symbols" }),
         expect.objectContaining({ name: "lsp_hover" }),
+        expect.objectContaining({ name: "lsp_rename", annotations: expect.objectContaining({ readOnlyHint: false }) }),
+        expect.objectContaining({ name: "lsp_code_actions", annotations: expect.objectContaining({ readOnlyHint: false }) }),
+        expect.objectContaining({ name: "lsp_will_rename_files", annotations: expect.objectContaining({ readOnlyHint: false }) }),
         expect.objectContaining({ name: "lsp_status" })
       ])
     });
@@ -117,6 +129,15 @@ describe("MCP dispatch", () => {
     ).resolves.toMatchObject({
       structuredContent: { file: "src/position.ts" }
     });
+    await expect(
+      dispatch(service, { method: "tools/call", params: { name: "lsp_rename", arguments: { file: "src/a.ts", line: 1, character: 1, new_name: "Renamed" } } })
+    ).resolves.toMatchObject({ structuredContent: { newName: "Renamed" } });
+    await expect(
+      dispatch(service, { method: "tools/call", params: { name: "lsp_code_actions", arguments: { file: "src/a.ts" } } })
+    ).resolves.toMatchObject({ structuredContent: { actions: [] } });
+    await expect(
+      dispatch(service, { method: "tools/call", params: { name: "lsp_will_rename_files", arguments: { old_path: "src/a.ts", new_path: "src/b.ts" } } })
+    ).resolves.toMatchObject({ structuredContent: { renamed: false, oldPath: "src/a.ts", newPath: "src/b.ts" } });
     await expect(
       dispatch(service, { method: "tools/call", params: { name: "lsp_status", arguments: {} } }, { status: () => ({ ok: true }) })
     ).resolves.toMatchObject({

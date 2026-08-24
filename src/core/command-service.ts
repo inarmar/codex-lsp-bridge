@@ -1,5 +1,5 @@
 import { summarizeDiagnostics } from "./diagnostics.js";
-import type { DiagnosticOptions, DiagnosticSummary, DocumentPosition, HoverInfo, Location, RenameSummary, SemanticProvider, SymbolMatch } from "./types.js";
+import type { CodeActionResult, DiagnosticOptions, DiagnosticSummary, DocumentPosition, FileRenameSummary, HoverInfo, Location, Range, RenameSummary, SemanticProvider, SymbolMatch } from "./types.js";
 import { uriToFilePath } from "../utils/uri.js";
 import type { SupportedLanguage } from "../adapters/language-registry.js";
 
@@ -55,6 +55,19 @@ export class CommandService {
     assertNonEmpty("newName", newName);
     return this.provider.rename(position, newName);
   }
+
+  async codeActions(file: string, range: Range, only?: string[], apply?: number): Promise<CodeActionResult> {
+    assertNonEmpty("file", file);
+    assertRange(range);
+    if (apply !== undefined && (!Number.isInteger(apply) || apply < 0)) throw new Error("apply must be a non-negative integer");
+    return this.provider.codeActions(file, range, only, apply);
+  }
+
+  async willRenameFiles(oldPath: string, newPath: string, renamed = false): Promise<FileRenameSummary> {
+    assertNonEmpty("oldPath", oldPath);
+    assertNonEmpty("newPath", newPath);
+    return renamed ? this.provider.notifyFilesRenamed(oldPath, newPath) : this.provider.willRenameFiles(oldPath, newPath);
+  }
 }
 
 export class WorkspaceCommandService {
@@ -100,6 +113,14 @@ export class WorkspaceCommandService {
     return this.forFile(position.file).rename(position, newName);
   }
 
+  async codeActions(file: string, range: Range, only?: string[], apply?: number): Promise<CodeActionResult> {
+    return this.forFile(file).codeActions(file, range, only, apply);
+  }
+
+  async willRenameFiles(oldPath: string, newPath: string, renamed = false): Promise<FileRenameSummary> {
+    return this.forFile(oldPath).willRenameFiles(oldPath, newPath, renamed);
+  }
+
   private forDefaultLanguage(): CommandService {
     return new CommandService(this.manager.forLanguage(this.defaultLanguage));
   }
@@ -112,6 +133,14 @@ export class WorkspaceCommandService {
 function assertNonEmpty(name: string, value: string): void {
   if (value.trim().length === 0) {
     throw new Error(`${name} is required`);
+  }
+}
+
+function assertRange(range: Range): void {
+  assertPosition({ file: "<range>", line: range.start.line, character: range.start.character });
+  assertPosition({ file: "<range>", line: range.end.line, character: range.end.character });
+  if (range.end.line < range.start.line || (range.end.line === range.start.line && range.end.character < range.start.character)) {
+    throw new Error("range end must not precede range start");
   }
 }
 

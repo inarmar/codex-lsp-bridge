@@ -72,6 +72,42 @@ export interface RenameSummary {
   editCount: number;
 }
 
+export interface CodeActionItem {
+  index: number;
+  title: string;
+  kind?: string;
+  isPreferred?: boolean;
+  hasEdit: boolean;
+  hasCommand: boolean;
+}
+
+export interface CodeActionApplied {
+  index: number;
+  title: string;
+  changedFiles: string[];
+  createdFiles: string[];
+  renamedFiles: Array<{ from: string; to: string }>;
+  deletedFiles: string[];
+  editCount: number;
+  commandExecuted: boolean;
+}
+
+export interface CodeActionResult {
+  actions: CodeActionItem[];
+  applied?: CodeActionApplied;
+}
+
+export interface FileRenameSummary {
+  oldPath: string;
+  newPath: string;
+  renamed: boolean;
+  changedFiles: string[];
+  createdFiles: string[];
+  renamedFiles: Array<{ from: string; to: string }>;
+  deletedFiles: string[];
+  editCount: number;
+}
+
 export interface SemanticProvider {
   diagnostics(uri?: string, options?: DiagnosticOptions): Promise<DiagnosticReport>;
   definition(symbol: string): Promise<Location>;
@@ -82,6 +118,9 @@ export interface SemanticProvider {
   hover(symbol: string): Promise<HoverInfo>;
   hoverAt(position: DocumentPosition): Promise<HoverInfo>;
   rename(position: DocumentPosition, newName: string): Promise<RenameSummary>;
+  codeActions(file: string, range: Range, only?: string[], apply?: number): Promise<CodeActionResult>;
+  willRenameFiles(oldPath: string, newPath: string): Promise<FileRenameSummary>;
+  notifyFilesRenamed(oldPath: string, newPath: string): Promise<FileRenameSummary>;
   dispose(): Promise<void>;
 }
 
