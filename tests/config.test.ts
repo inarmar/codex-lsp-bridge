@@ -111,7 +111,7 @@ describe("config", () => {
     const config = loadConfig(rootPath);
     const registry = LanguageRegistry.fromMergedConfig(config);
     expect(config.defaultLanguage).toBe("zig");
-    expect(registry.languages()).toEqual(["typescript", "rust", "python", "go", "zig"]);
+    expect(registry.languages()).toEqual(["typescript", "rust", "python", "go", "svelte", "zig"]);
     expect(registry.descriptor("zig")).toMatchObject({ command: "zls", installHint: "npm install -g zls" });
     expect(registry.detectByExtension("src/main.zig")).toBe("zig");
   });

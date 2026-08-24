@@ -5,7 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 Read-only LSP tools for Codex CLI, with TypeScript as the primary path and
-experimental Rust support through `rust-analyzer`.
+experimental Rust, Python, Go, and Svelte support through local language
+servers. Any other language can be added with one config entry.
 
 `codex-lsp-bridge` gives Codex semantic signals from your local language
 servers — diagnostics, definitions, references, symbols, hover, and status —
@@ -144,6 +145,16 @@ The MVP is intentionally narrow and ready for local always-on use.
 | Rust | Experimental | `rust-analyzer` | `.rs` | `rustup component add rust-analyzer` |
 | Python | Experimental | `pyright-langserver` | `.py` | `npm install -g pyright` |
 | Go | Experimental | `gopls` | `.go` | `go install golang.org/x/tools/gopls@latest` |
+| Svelte | Experimental | `svelteserver` | `.svelte` | `npm install -g svelte-language-server` |
+
+Svelte note: `svelteserver` fully diagnoses the TypeScript/JavaScript inside
+`.svelte` files only when the target workspace has the `svelte` compiler
+installed (`node_modules/svelte`). Without it, diagnostics degrade — that is
+a property of the language server, not of the bridge.
+
+These languages are just the defaults layer of the config below: every one of
+them can be overridden field by field, and new languages can be added the same
+way.
 
 For TypeScript projects, install a language server if needed:
 
@@ -527,6 +538,34 @@ workspace hints:
 Auto mode starts at 15000 ms and increases for monorepo markers, TypeScript
 project references, and large sampled source trees. It is capped at 60000 ms.
 `codex-lsp-bridge doctor --root .` reports the resolved timeout and reasons.
+
+### Adding a language server
+
+Every supported language is a `languageServers` entry; the table above is just
+the defaults layer. To add a language the bridge does not ship, write its
+descriptor in the same config — `command` and `extensions` are required, the
+rest is optional:
+
+```json
+{
+  "languageServers": {
+    "zig": {
+      "command": "zls",
+      "extensions": [".zig"],
+      "workspaceSeedFiles": ["src/main.zig", "build.zig"],
+      "installHint": "npm install -g zls"
+    }
+  }
+}
+```
+
+After that, diagnostics, definitions, references, symbols, hover, the
+post-tool hook, and `doctor` treat `.zig` like any built-in language. Entries
+merge field by field over the defaults layer (global config, then workspace
+config), so `"rust": { "command": "my-analyzer" }` replaces only the command.
+A field is replaced as a whole, not per element. Unknown languages with
+missing `command` or `extensions`, and entries whose extensions collide with
+another language, are rejected with an error naming the entry.
 
 File diagnostics can also override the wait per call:
 

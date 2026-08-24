@@ -52,5 +52,14 @@ export const defaultLanguageServers: Record<string, LanguageDescriptor> = {
     workspaceSeedFiles: ["main.go", "cmd/main.go"],
     installHint: "go install golang.org/x/tools/gopls@latest",
     supportLevel: "experimental"
+  },
+  svelte: {
+    languageId: "svelte",
+    command: "svelteserver",
+    args: ["--stdio"],
+    extensions: [".svelte"],
+    workspaceSeedFiles: ["src/App.svelte", "src/routes/+page.svelte"],
+    installHint: "npm install -g svelte-language-server",
+    supportLevel: "experimental"
   }
 };

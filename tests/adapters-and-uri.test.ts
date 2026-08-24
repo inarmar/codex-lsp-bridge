@@ -30,7 +30,7 @@ describe("language registry", () => {
   });
 
   it("lists languages from the defaults layer", () => {
-    expect(registry.languages()).toEqual(["typescript", "rust", "python", "go"]);
+    expect(registry.languages()).toEqual(["typescript", "rust", "python", "go", "svelte"]);
     expect(createLanguageServerConfig("go", registry.descriptor("go"), ".")).toMatchObject({
       language: "go",
       languageId: "go",
