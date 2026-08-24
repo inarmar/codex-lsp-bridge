@@ -10,23 +10,29 @@ const repoRoot = process.cwd();
 const bridgeCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
 const maxFiles = Number(process.env.CODEX_LSP_HOOK_MAX_FILES ?? 5);
 const verbosePending = isEnabled(process.env.CODEX_LSP_HOOK_VERBOSE_PENDING);
-const supportedSourceFilePattern = /\.(ts|tsx|js|jsx|rs|py|go)$/;
-const languageServersByExtension = {
-  ".ts": "typescript-language-server",
-  ".tsx": "typescript-language-server",
-  ".js": "typescript-language-server",
-  ".jsx": "typescript-language-server",
-  ".rs": "rust-analyzer",
-  ".py": "pyright-langserver",
-  ".go": "gopls"
+
+// Fallback mirror of src/adapters/default-language-servers.ts — used ONLY when
+// the bridge CLI is unavailable (partially installed package). NOT a source of
+// truth: language knowledge lives in the config cascade.
+const fallbackLanguagesByExtension = {
+  ".ts": { language: "typescript", command: "typescript-language-server" },
+  ".tsx": { language: "typescript", command: "typescript-language-server" },
+  ".js": { language: "typescript", command: "typescript-language-server" },
+  ".jsx": { language: "typescript", command: "typescript-language-server" },
+  ".rs": { language: "rust", command: "rust-analyzer" },
+  ".py": { language: "python", command: "pyright-langserver" },
+  ".go": { language: "go", command: "gopls" },
+  ".svelte": { language: "svelte", command: "svelteserver" }
 };
+
+const languagesByExtension = loadLanguagesByExtension();
 
 const input = await readStdin();
 const event = parseJson(input);
 const files = [...collectTouchedFiles(event)]
   .map((file) => path.resolve(repoRoot, file))
   .filter((file) => file.startsWith(repoRoot + path.sep))
-  .filter((file) => supportedSourceFilePattern.test(file))
+  .filter((file) => isSupportedSourceFile(file))
   .filter((file) => fs.existsSync(file))
   .slice(0, maxFiles);
 
@@ -37,7 +43,8 @@ if (files.length === 0) {
 const diagnostics = [];
 const skippedServers = new Map();
 for (const file of files) {
-  const serverCommand = languageServersByExtension[path.extname(file)];
+  const languageEntry = languagesByExtension[path.extname(file)];
+  const serverCommand = languageEntry?.command;
   if (serverCommand && !commandExists(serverCommand)) {
     skippedServers.set(serverCommand, (skippedServers.get(serverCommand) ?? 0) + 1);
     continue;
@@ -98,6 +105,26 @@ if (isDuplicate(diagnostics)) {
 console.log("[codex-lsp-bridge] diagnostics after tool use:");
 console.log(JSON.stringify(diagnostics, null, 2));
 
+function isSupportedSourceFile(file) {
+  return Object.prototype.hasOwnProperty.call(languagesByExtension, path.extname(file));
+}
+
+function loadLanguagesByExtension() {
+  const result = spawnSync(process.execPath, [bridgeCli, "languages", "--root", repoRoot], {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024
+  });
+  if (result.status === 0) {
+    try {
+      const parsed = JSON.parse(result.stdout);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      // fall through to the fallback table
+    }
+  }
+  return fallbackLanguagesByExtension;
+}
+
 function parseJson(value) {
   if (value.trim().length === 0) return {};
   try {
@@ -146,7 +173,7 @@ function isPathKey(key) {
 }
 
 function addPathIfCandidate(value, files) {
-  if (!supportedSourceFilePattern.test(value)) return;
+  if (!isSupportedSourceFile(value)) return;
   if (value.includes("\n")) return;
   files.add(value);
 }

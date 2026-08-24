@@ -74,6 +74,18 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (args[0] === "languages") {
+      const byExtension: Record<string, { language: string; command: string }> = {};
+      for (const language of registry.languages()) {
+        const descriptor = registry.descriptor(language);
+        for (const extension of descriptor.extensions) {
+          byExtension[extension] = { language, command: descriptor.command };
+        }
+      }
+      console.log(JSON.stringify(byExtension, null, 2));
+      return;
+    }
+
     const language = readLanguage(args, config.defaultLanguage, registry.languages());
     const service = serviceForRoot(root, language);
 
@@ -203,6 +215,7 @@ function printUsage(stream: "stdout" | "stderr", languages: string[]): void {
   codex-lsp-bridge uninstall [--dry-run]
   codex-lsp-bridge post-tool-diagnostics
   codex-lsp-bridge doctor [--root path]
+  codex-lsp-bridge languages [--root path]
   codex-lsp-bridge diagnostics [--file path] [--timeout-ms n] ${languageOptions} [--root path]
   codex-lsp-bridge diagnostics --dir path [--severity error|warning|information|hint] [--max-files n] [--timeout-budget-ms n] [--concurrency n] [--root path]
   codex-lsp-bridge definition <symbol> ${languageOptions} [--root path]

@@ -7,6 +7,10 @@ description: Use codex-lsp-bridge for read-only semantic diagnostics, definition
 
 Use the `codex-lsp-bridge` MCP tools as a semantic feedback layer for code work.
 
+- Supported languages come from the workspace config (`lsp-client.json`), not a
+  fixed list: TypeScript, Rust, Python, Go, Svelte by default, and any language
+  added via a `languageServers` config entry. Run `codex-lsp-bridge languages
+  --root .` or `lsp_status` to see what is configured.
 - Prefer `lsp_diagnostics` after editing supported source files.
 - During code review, audit, or investigation workflows, call `lsp_diagnostics` for changed supported files or the smallest representative set before final findings.
 - For large TypeScript workspaces, use file diagnostics `timeoutMs` when the default wait is too short. Do not pass `timeoutBudgetMs` for file diagnostics; it is directory-only.

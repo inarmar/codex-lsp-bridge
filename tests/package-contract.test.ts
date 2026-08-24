@@ -1,8 +1,10 @@
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const packageRoot = process.cwd();
+const distIndex = path.join(packageRoot, "dist", "index.js");
 
 function readJson<T>(relativePath: string): T {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, relativePath), "utf8")) as T;
@@ -68,5 +70,19 @@ describe("package contract", () => {
     expect(plugin.hooks).toBe("hooks/hooks.json");
     expect(fs.existsSync(path.join(packageRoot, plugin.skills[0]))).toBe(true);
     expect(fs.existsSync(path.join(packageRoot, plugin.hooks))).toBe(true);
+  });
+});
+
+describe.skipIf(!fs.existsSync(distIndex))("dist CLI", () => {
+  it("exposes the languages subcommand used by the post-tool hook", () => {
+    const result = spawnSync(process.execPath, [distIndex, "languages", "--root", packageRoot], {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024
+    });
+
+    expect(result.status).toBe(0);
+    const byExtension = JSON.parse(result.stdout) as Record<string, { language: string; command: string }>;
+    expect(byExtension[".ts"]).toMatchObject({ language: "typescript", command: "typescript-language-server" });
+    expect(byExtension[".svelte"]).toMatchObject({ language: "svelte", command: "svelteserver" });
   });
 });
