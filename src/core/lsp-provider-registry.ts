@@ -8,17 +8,17 @@ import {
   type SupportedLanguage
 } from "../adapters/language-config.js";
 
-export interface LspManagerOptions {
+export interface LspProviderRegistryOptions {
   diagnosticsTimeoutMs?: number;
   languageServers?: Partial<Record<SupportedLanguage, LanguageServerOverride>>;
 }
 
-export class LspManager {
+export class LspProviderRegistry {
   private readonly providers = new Map<SupportedLanguage, SemanticProvider>();
 
   constructor(
     private readonly rootPath: string,
-    private readonly options: LspManagerOptions = {}
+    private readonly options: LspProviderRegistryOptions = {}
   ) {}
 
   forLanguage(language: SupportedLanguage): SemanticProvider {

@@ -9,7 +9,7 @@ import { WorkspaceCommandService } from "./core/command-service.js";
 import { loadConfig } from "./core/config.js";
 import { resolveDiagnosticsTimeout } from "./core/diagnostics-timeout.js";
 import { runDoctor } from "./core/doctor.js";
-import { LspManager } from "./core/lsp-manager.js";
+import { LspProviderRegistry } from "./core/lsp-provider-registry.js";
 import { filePathToUri } from "./utils/uri.js";
 import { runStdioMcp } from "./transport/mcp.js";
 import type { SupportedLanguage } from "./adapters/language-config.js";
@@ -49,7 +49,7 @@ async function main(): Promise<void> {
 
   const root = path.resolve(readOption(args, "--root") ?? process.cwd());
   const config = loadConfig(root);
-  const managers = new Map<string, LspManager>();
+  const managers = new Map<string, LspProviderRegistry>();
   const sourceFileListCache = new Map<string, SourceFileListCacheEntry>();
   const serviceForRoot = (serviceRoot: string, languageOverride?: SupportedLanguage) => {
     const resolvedRoot = path.resolve(serviceRoot);
@@ -57,7 +57,7 @@ async function main(): Promise<void> {
     let scopedManager = managers.get(resolvedRoot);
     if (!scopedManager) {
       const diagnosticsTimeout = resolveDiagnosticsTimeout(resolvedRoot, rootConfig.diagnosticsTimeoutMs);
-      scopedManager = new LspManager(resolvedRoot, {
+      scopedManager = new LspProviderRegistry(resolvedRoot, {
         diagnosticsTimeoutMs: diagnosticsTimeout.timeoutMs,
         languageServers: rootConfig.languageServers
       });

@@ -9,7 +9,7 @@ const requiredPackageFiles = [
   "dist/index.js",
   "dist/adapters/language-config.js",
   "dist/core/command-service.js",
-  "dist/core/lsp-manager.js",
+  "dist/core/lsp-provider-registry.js",
   "dist/transport/mcp.js",
   "dist/utils/uri.js",
   "scripts/codex-lsp-post-tool-use.mjs",

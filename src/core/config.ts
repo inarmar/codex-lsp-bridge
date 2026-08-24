@@ -4,7 +4,7 @@ import path from "node:path";
 import { readDiagnosticsTimeoutPolicy, type DiagnosticsTimeoutPolicy } from "./diagnostics-timeout.js";
 import type { SupportedLanguage } from "../adapters/language-config.js";
 
-export interface LspClientConfig {
+export interface BridgeConfig {
   defaultLanguage: SupportedLanguage;
   diagnosticsTimeoutMs: DiagnosticsTimeoutPolicy;
   hook: {
@@ -14,7 +14,7 @@ export interface LspClientConfig {
   languageServers: Partial<Record<SupportedLanguage, { command?: string; args?: string[] }>>;
 }
 
-const defaults: LspClientConfig = {
+const defaults: BridgeConfig = {
   defaultLanguage: "typescript",
   diagnosticsTimeoutMs: 15000,
   hook: {
@@ -24,21 +24,21 @@ const defaults: LspClientConfig = {
   languageServers: {}
 };
 
-export function loadConfig(rootPath: string): LspClientConfig {
+export function loadConfig(rootPath: string): BridgeConfig {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   const globalConfig = readConfig(path.join(codexHome, "lsp-client.json"));
   const localConfig = readConfig(path.join(rootPath, ".codex", "lsp-client.json"));
   return mergeConfig(defaults, globalConfig, localConfig);
 }
 
-function readConfig(filePath: string): Partial<LspClientConfig> {
+function readConfig(filePath: string): Partial<BridgeConfig> {
   if (!fs.existsSync(filePath)) return {};
-  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<LspClientConfig>;
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<BridgeConfig>;
   return parsed && typeof parsed === "object" ? parsed : {};
 }
 
-function mergeConfig(...configs: Partial<LspClientConfig>[]): LspClientConfig {
-  return configs.reduce<LspClientConfig>(
+function mergeConfig(...configs: Partial<BridgeConfig>[]): BridgeConfig {
+  return configs.reduce<BridgeConfig>(
     (merged, config) => ({
       defaultLanguage: isSupportedLanguage(config.defaultLanguage) ? config.defaultLanguage : merged.defaultLanguage,
       diagnosticsTimeoutMs: readDiagnosticsTimeoutPolicy(config.diagnosticsTimeoutMs, merged.diagnosticsTimeoutMs),

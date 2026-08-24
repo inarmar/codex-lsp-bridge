@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { LspManager } from "../src/core/lsp-manager.js";
+import { LspProviderRegistry } from "../src/core/lsp-provider-registry.js";
 
-describe("LspManager", () => {
+describe("LspProviderRegistry", () => {
   it("lazily creates one provider per language", () => {
-    const manager = new LspManager(process.cwd());
+    const manager = new LspProviderRegistry(process.cwd());
 
     expect(manager.forLanguage("typescript")).toBe(manager.forLanguage("typescript"));
     expect(manager.forFile("src/app.ts")).toBe(manager.forLanguage("typescript"));
@@ -12,13 +12,13 @@ describe("LspManager", () => {
   });
 
   it("rejects unsupported file extensions at the manager boundary", () => {
-    const manager = new LspManager(process.cwd());
+    const manager = new LspProviderRegistry(process.cwd());
 
     expect(() => manager.forFile("README.md")).toThrow("Unsupported file extension");
   });
 
   it("disposes created providers", async () => {
-    const manager = new LspManager(process.cwd());
+    const manager = new LspProviderRegistry(process.cwd());
     manager.forLanguage("typescript");
 
     await expect(manager.dispose()).resolves.toBeUndefined();
