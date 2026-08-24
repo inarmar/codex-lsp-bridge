@@ -11,6 +11,45 @@ import { filePathToUri } from "../src/utils/uri.js";
 const hasTypeScriptLanguageServer = await commandExists("typescript-language-server");
 
 describe.skipIf(!hasTypeScriptLanguageServer)("TypeScript language server integration", () => {
+  it("renames a symbol across multiple files through the real TypeScript server", async () => {
+    const rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-ts-rename-"));
+    const definitionPath = path.join(rootPath, "src", "editor.ts");
+    const usagePath = path.join(rootPath, "src", "usage.ts");
+    await fs.mkdir(path.dirname(definitionPath), { recursive: true });
+    await fs.writeFile(
+      path.join(rootPath, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { strict: true, target: "ES2022", module: "ESNext" }, include: ["src"] }),
+      "utf8"
+    );
+    await fs.writeFile(definitionPath, "export const Editor = 1;\n", "utf8");
+    await fs.writeFile(usagePath, 'import { Editor } from "./editor";\nconsole.log(Editor);\n', "utf8");
+
+    const config = createLanguageServerConfig("typescript", defaultLanguageServers.typescript, rootPath);
+    const provider = new LspSemanticProvider({
+      rootPath,
+      languageId: config.languageId,
+      server: config.server,
+      workspaceSeedFiles: config.workspaceSeedFiles,
+      workspaceSeedExtensions: config.extensions,
+      diagnosticsTimeoutMs: 5000,
+      clientFactory: (server) => new JsonRpcLspClient(server)
+    });
+
+    try {
+      await expect(provider.rename({ file: definitionPath, line: 1, character: 14 }, "Renamed")).resolves.toMatchObject({
+        oldName: "Editor",
+        newName: "Renamed",
+        editCount: expect.any(Number)
+      });
+      await expect(fs.readFile(definitionPath, "utf8")).resolves.toContain("Renamed");
+      await expect(fs.readFile(usagePath, "utf8")).resolves.toContain("Renamed");
+    } finally {
+      await provider.dispose();
+      await fs.rm(rootPath, { recursive: true, force: true });
+    }
+  }, 30000);
+
+
   it("round-trips diagnostics across open, change, and clean states", async () => {
     const rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-ts-fixture-"));
     const filePath = path.join(rootPath, "src", "index.ts");
