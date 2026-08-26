@@ -25,10 +25,12 @@ const defaults: BridgeConfig = {
   languageServers: { ...defaultLanguageServers }
 };
 
+const configFile: string = "lsp-bridge.json";
+
 export function loadConfig(rootPath: string): BridgeConfig {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-  const globalConfig = readConfig(path.join(codexHome, "lsp-client.json"));
-  const localConfig = readConfig(path.join(rootPath, ".codex", "lsp-client.json"));
+  const globalConfig = readConfig(path.join(codexHome, configFile));
+  const localConfig = readConfig(path.join(rootPath, ".codex", configFile));
   const config = mergeConfig(defaults, globalConfig, localConfig);
   const registry = LanguageRegistry.fromMergedConfig(config);
   if (!registry.has(config.defaultLanguage)) {
