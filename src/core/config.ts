@@ -25,7 +25,7 @@ const defaults: BridgeConfig = {
   languageServers: { ...defaultLanguageServers }
 };
 
-const configFile: string = "lsp-bridge.json";
+export const configFile: string = "lsp-bridge.json";
 
 export function loadConfig(rootPath: string): BridgeConfig {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");

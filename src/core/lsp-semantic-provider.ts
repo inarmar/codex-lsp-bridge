@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { LspClient, ServerProcessConfig } from "./json-rpc-lsp-client.js";
+import type { LspClient, ServerProcessConfig } from "./json-rpc-lsp-bridge.js";
 import { lspSeverityToText } from "./diagnostics.js";
 import type { CodeActionItem, CodeActionResult, Diagnostic, DiagnosticOptions, DiagnosticReport, DocumentPosition, FileRenameSummary, HoverInfo, Location, Position, Range, RenameSummary, SemanticProvider, SymbolMatch } from "./types.js";
 import {

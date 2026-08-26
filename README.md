@@ -528,8 +528,8 @@ Status request:
 
 ## Configuration
 
-Optional JSON config is read from `~/.codex/lsp-client.json` and then
-`<workspace>/.codex/lsp-client.json`; workspace config wins.
+Optional JSON config is read from `~/.codex/lsp-bridge.json` and then
+`<workspace>/.codex/lsp-bridge.json`; workspace config wins.
 
 Use global config for your personal default and workspace config for large
 repos that need longer language-server warmup. For a Rust-first workspace:
@@ -723,3 +723,5 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 ## License
 
 MIT. See [LICENSE](./LICENSE).
+
+The project originates from shjeon-96/codex-lsp-bridge.

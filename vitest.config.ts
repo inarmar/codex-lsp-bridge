@@ -10,7 +10,7 @@ export default defineConfig({
         "scripts/**",
         "vitest.config.ts",
         "src/index.ts",
-        "src/core/json-rpc-lsp-client.ts",
+        "src/core/json-rpc-lsp-bridge.ts",
         "src/core/types.ts"
       ],
       thresholds: {

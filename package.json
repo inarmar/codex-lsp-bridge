@@ -6,12 +6,12 @@
   "author": "codex-lsp-bridge contributors",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shjeon-96/codex-lsp-bridge.git"
+    "url": "git+https://github.com/inarmar/codex-lsp-bridge.git"
   },
   "bugs": {
-    "url": "https://github.com/shjeon-96/codex-lsp-bridge/issues"
+    "url": "https://github.com/inarmar/codex-lsp-bridge/issues"
   },
-  "homepage": "https://github.com/shjeon-96/codex-lsp-bridge#readme",
+  "homepage": "https://github.com/inarmar/codex-lsp-bridge#readme",
   "type": "module",
   "bin": {
     "codex-lsp-bridge": "dist/index.js",

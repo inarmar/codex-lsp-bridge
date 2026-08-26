@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LspSemanticProvider } from "../src/core/lsp-semantic-provider.js";
-import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-client.js";
-import type { LspClient, ServerProcessConfig } from "../src/core/json-rpc-lsp-client.js";
+import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-bridge.js";
+import type { LspClient, ServerProcessConfig } from "../src/core/json-rpc-lsp-bridge.js";
 import { filePathToUri } from "../src/utils/uri.js";
 
 class FakeClient extends EventEmitter implements LspClient {

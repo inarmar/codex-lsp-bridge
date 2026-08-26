@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLanguageServerConfig } from "../src/adapters/language-registry.js";
 import { defaultLanguageServers } from "../src/adapters/default-language-servers.js";
-import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-client.js";
+import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-bridge.js";
 import { LspSemanticProvider } from "../src/core/lsp-semantic-provider.js";
 import { filePathToUri } from "../src/utils/uri.js";
 

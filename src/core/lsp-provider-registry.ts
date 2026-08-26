@@ -1,4 +1,4 @@
-import { JsonRpcLspClient } from "./json-rpc-lsp-client.js";
+import { JsonRpcLspClient } from "./json-rpc-lsp-bridge.js";
 import { LspSemanticProvider } from "./lsp-semantic-provider.js";
 import type { SemanticProvider } from "./types.js";
 import { defaultLanguageServers } from "../adapters/default-language-servers.js";

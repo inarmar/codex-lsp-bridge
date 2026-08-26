@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-client.js";
+import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-bridge.js";
 
 const fakeServerPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-lsp-server.mjs");
 

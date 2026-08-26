@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ServerProcessConfig } from "../core/json-rpc-lsp-client.js";
+import type { ServerProcessConfig } from "../core/json-rpc-lsp-bridge.js";
 
 /**
  * Any language name known to the Language Registry: from the defaults layer

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig } from "../src/core/config.js";
+import { configFile, loadConfig } from "../src/core/config.js";
 import { LanguageRegistry } from "../src/adapters/language-registry.js";
 
 describe("config", () => {
@@ -17,18 +17,18 @@ describe("config", () => {
     else process.env.CODEX_HOME = originalCodexHome;
   });
 
-  it("merges global and project lsp-client config", async () => {
+  it("merges global and project lsp-bridge config", async () => {
     rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
     homePath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-home-"));
     process.env.CODEX_HOME = path.join(homePath, ".codex");
     await fs.mkdir(process.env.CODEX_HOME, { recursive: true });
     await fs.mkdir(path.join(rootPath, ".codex"), { recursive: true });
     await fs.writeFile(
-      path.join(process.env.CODEX_HOME, "lsp-client.json"),
+      path.join(process.env.CODEX_HOME, configFile),
       JSON.stringify({ diagnosticsTimeoutMs: 3000, hook: { maxFiles: 9 }, defaultLanguage: "python" })
     );
     await fs.writeFile(
-      path.join(rootPath, ".codex", "lsp-client.json"),
+      path.join(rootPath, ".codex", configFile),
       JSON.stringify({ hook: { verbosePending: true }, defaultLanguage: "typescript" })
     );
 
@@ -54,7 +54,7 @@ describe("config", () => {
     homePath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-home-"));
     process.env.CODEX_HOME = path.join(homePath, ".codex");
     await fs.mkdir(process.env.CODEX_HOME, { recursive: true });
-    await fs.writeFile(path.join(process.env.CODEX_HOME, "lsp-client.json"), JSON.stringify({ diagnosticsTimeoutMs: "auto" }));
+    await fs.writeFile(path.join(process.env.CODEX_HOME, configFile), JSON.stringify({ diagnosticsTimeoutMs: "auto" }));
 
     expect(loadConfig(rootPath)).toMatchObject({
       diagnosticsTimeoutMs: "auto"
@@ -64,7 +64,7 @@ describe("config", () => {
   it("accepts Rust as the default language", async () => {
     rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
     await fs.mkdir(path.join(rootPath, ".codex"), { recursive: true });
-    await fs.writeFile(path.join(rootPath, ".codex", "lsp-client.json"), JSON.stringify({ defaultLanguage: "rust" }));
+    await fs.writeFile(path.join(rootPath, ".codex", configFile), JSON.stringify({ defaultLanguage: "rust" }));
 
     expect(loadConfig(rootPath)).toMatchObject({
       defaultLanguage: "rust"
@@ -77,12 +77,12 @@ describe("config", () => {
     process.env.CODEX_HOME = path.join(homePath, ".codex");
     await fs.mkdir(process.env.CODEX_HOME, { recursive: true });
     await fs.writeFile(
-      path.join(process.env.CODEX_HOME, "lsp-client.json"),
+      path.join(process.env.CODEX_HOME, configFile),
       JSON.stringify({ languageServers: { rust: { args: ["--log", "verbose"] } } })
     );
     await fs.mkdir(path.join(rootPath, ".codex"), { recursive: true });
     await fs.writeFile(
-      path.join(rootPath, ".codex", "lsp-client.json"),
+      path.join(rootPath, ".codex", configFile),
       JSON.stringify({ languageServers: { rust: { command: "my-analyzer" } } })
     );
 
@@ -101,7 +101,7 @@ describe("config", () => {
     rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
     await fs.mkdir(path.join(rootPath, ".codex"), { recursive: true });
     await fs.writeFile(
-      path.join(rootPath, ".codex", "lsp-client.json"),
+      path.join(rootPath, ".codex", configFile),
       JSON.stringify({
         defaultLanguage: "zig",
         languageServers: { zig: { command: "zls", extensions: [".zig"], installHint: "npm install -g zls" } }
@@ -119,7 +119,7 @@ describe("config", () => {
   it("falls back to typescript when the default language is unknown", async () => {
     rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
     await fs.mkdir(path.join(rootPath, ".codex"), { recursive: true });
-    await fs.writeFile(path.join(rootPath, ".codex", "lsp-client.json"), JSON.stringify({ defaultLanguage: "java" }));
+    await fs.writeFile(path.join(rootPath, ".codex", configFile), JSON.stringify({ defaultLanguage: "java" }));
 
     expect(loadConfig(rootPath)).toMatchObject({
       defaultLanguage: "typescript"
@@ -130,14 +130,14 @@ describe("config", () => {
     rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
     await fs.mkdir(path.join(rootPath, ".codex"), { recursive: true });
     await fs.writeFile(
-      path.join(rootPath, ".codex", "lsp-client.json"),
+      path.join(rootPath, ".codex", configFile),
       JSON.stringify({ languageServers: { zig: { command: "zls" } } })
     );
 
     expect(() => loadConfig(rootPath)).toThrow("languageServers.zig: missing required field 'extensions'");
 
     await fs.writeFile(
-      path.join(rootPath, ".codex", "lsp-client.json"),
+      path.join(rootPath, ".codex", configFile),
       JSON.stringify({ languageServers: { myts: { command: "other-server", extensions: [".ts"] } } })
     );
 

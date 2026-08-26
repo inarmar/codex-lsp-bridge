@@ -12,7 +12,7 @@ skill: ubiquitous-language
 > the names are evidence found in code and are binding; the definitions are a
 > reconstruction of what the code seems to mean and may be wrong until a domain expert
 > confirms them. Maintained by the `ubiquitous-language` skill
-> (https://github.com/CodeAlive-AI/ai-driven-development/tree/main/skills/ubiquitous-language).
+> (<https://github.com/CodeAlive-AI/ai-driven-development/tree/main/skills/ubiquitous-language>).
 >
 > **How to use (grep-first):** `rg -n -i '<word>' THESAURUS.md` — the shape of the hit
 > line tells you what to do:
@@ -85,7 +85,7 @@ skill: ubiquitous-language
 
 ### Bridge Config
 
-- **Definition**: The user-facing configuration of the whole Bridge, loaded from `~/.codex/lsp-client.json` and `<workspace>/.codex/lsp-client.json` (workspace wins): `defaultLanguage`, `diagnosticsTimeoutMs`, `hook` options, and `languageServers` — per-language entries merged field by field over the Default Language Servers layer (defaults → global → workspace). The config file keeps its historical name `lsp-client.json`.
+- **Definition**: The user-facing configuration of the whole Bridge, loaded from `~/.codex/lsp-bridge.json` and `<workspace>/.codex/lsp-bridge.json` (workspace wins): `defaultLanguage`, `diagnosticsTimeoutMs`, `hook` options, and `languageServers` — per-language entries merged field by field over the Default Language Servers layer (defaults → global → workspace). The config file have renamed to `lsp-bridge.json`.
 - **NOT**: A language-server descriptor (that's Language Server via `LanguageServerConfig`) or a spawn recipe (`ServerProcessConfig`).
 - **Related**: Language Descriptor, Default Language Servers, Diagnostics Timeout Policy, Supported Language
 
@@ -342,7 +342,7 @@ skill: ubiquitous-language
 > `→`. `A + B` = the old name was split; `→ —` = retired with no single successor.
 
 - `LspManager` → `LspProviderRegistry` in: git history, docs predating the rename — renamed 2025, decision recorded in `docs/THESAURUS.md`
-- `LspClientConfig` → `BridgeConfig` in: git history — type renamed; the config FILE keeps its historical name `lsp-client.json` (renaming it is breaking for existing installs)
+- `LspClientConfig` → `BridgeConfig` in: git history — type renamed; the config FILE also renamed to `lsp-bridge.json`
 - `LanguageServerOverride` → `LanguageDescriptor` in: git history — config entries are partial descriptors merged field by field over the defaults layer; the override type was absorbed by the descriptor format
 
 ## Unresolved
@@ -350,4 +350,4 @@ skill: ubiquitous-language
 > Naming ambiguities, contradictions, and open questions. Each needs a human decision
 > before the name can enter the Index. Resolve top-down by impact.
 
-(none — all four initial items resolved by the owner on 2025: `CommandService`/`WorkspaceCommandService` and `HoverInfo` kept as canonical; `LspManager` → `LspProviderRegistry`; `LspClientConfig` → `BridgeConfig`, file name `lsp-client.json` unchanged. The file rename `lsp-client.json` → e.g. `codex-lsp-bridge.json` was deferred — revisit on the next major version if the "config for a client" wording keeps confusing.)
+(none — all four initial items resolved by the owner on 2025: `CommandService`/`WorkspaceCommandService` and `HoverInfo` kept as canonical; `LspManager` → `LspProviderRegistry`; `LspClientConfig` → `BridgeConfig`. The file `lsp-client.json` renamed to `lsp-bridge.json`)

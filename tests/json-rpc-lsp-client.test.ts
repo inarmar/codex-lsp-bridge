@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-client.js";
+import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-bridge.js";
 
 describe("JsonRpcLspClient", () => {
   it("rejects requests instead of crashing when the language server command is missing", async () => {
