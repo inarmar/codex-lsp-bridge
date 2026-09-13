@@ -45,7 +45,7 @@ For diagnostics issues, ask for:
 
 - Exact CLI command or MCP tool arguments.
 - Full diagnostics response including `status`, `timedOut`, `stale`, and `sourceRevision`.
-- `codex-lsp-bridge doctor --root .` output.
+- `codex-lsp-bridge status --root .` output.
 - Language server version and install path.
 - Workspace shape, especially monorepos, project references, package manager, and config files.
 

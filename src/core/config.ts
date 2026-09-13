@@ -64,12 +64,12 @@ function mergeConfig(...configs: Partial<BridgeConfig>[]): BridgeConfig {
       defaultLanguage: typeof config.defaultLanguage === "string" ? config.defaultLanguage : merged.defaultLanguage,
       diagnosticsTimeoutMs: readDiagnosticsTimeoutPolicy(config.diagnosticsTimeoutMs, merged.diagnosticsTimeoutMs),
       directoryDiagnostics: {
-        maxFiles: readPositiveNumber(config.directoryDiagnostics?.maxFiles, merged.directoryDiagnostics.maxFiles),
-        timeoutBudgetMs: readPositiveNumber(config.directoryDiagnostics?.timeoutBudgetMs, merged.directoryDiagnostics.timeoutBudgetMs),
-        concurrency: readPositiveNumber(config.directoryDiagnostics?.concurrency, merged.directoryDiagnostics.concurrency)
+        maxFiles: readPositiveInteger(config.directoryDiagnostics?.maxFiles, merged.directoryDiagnostics.maxFiles),
+        timeoutBudgetMs: readPositiveInteger(config.directoryDiagnostics?.timeoutBudgetMs, merged.directoryDiagnostics.timeoutBudgetMs),
+        concurrency: readPositiveInteger(config.directoryDiagnostics?.concurrency, merged.directoryDiagnostics.concurrency)
       },
       hook: {
-        maxFiles: readPositiveNumber(config.hook?.maxFiles, merged.hook.maxFiles),
+        maxFiles: readPositiveInteger(config.hook?.maxFiles, merged.hook.maxFiles),
         verbosePending: typeof config.hook?.verbosePending === "boolean" ? config.hook.verbosePending : merged.hook.verbosePending
       },
       languageServers: mergeLanguageServers(merged.languageServers, config.languageServers)
@@ -97,6 +97,6 @@ function mergeLanguageServers(
   return merged;
 }
 
-function readPositiveNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+function readPositiveInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }

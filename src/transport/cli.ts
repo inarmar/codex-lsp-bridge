@@ -42,21 +42,24 @@ export function parseCliArgs(argv: string[]): BridgeRequest {
   const numeric = (key: string): number | undefined => {
     const raw = options.get(key);
     if (raw === undefined) return undefined;
-    return Number(raw);
+    return parseDecimalNumber(raw);
   };
 
   switch (command) {
     case "status":
       assertAllowedOptions(options, ["root"], command);
+      assertNoPositionals(positionals, command);
       return { ...requestRoot(root), operation: decodeStatus({}) };
     case "diagnostics":
       assertAllowedOptions(options, ["file", "timeout-ms", "root"], command);
+      assertNoPositionals(positionals, command);
       return {
         ...requestRoot(root),
         operation: decodeFileDiagnostics(withOptional("timeoutMs", numeric("timeout-ms"), { file: options.get("file") }))
       };
     case "directory-diagnostics":
       assertAllowedOptions(options, ["dir", "severity", "max-files", "timeout-budget-ms", "concurrency", "root"], command);
+      assertNoPositionals(positionals, command);
       return {
         ...requestRoot(root),
         operation: decodeDirectoryDiagnostics(
@@ -84,12 +87,14 @@ export function parseCliArgs(argv: string[]): BridgeRequest {
       return { ...requestRoot(root), operation: decodeHover(symbolOrPosition(command, positionals, options)) };
     case "symbols":
       assertAllowedOptions(options, ["language", "root"], command);
+      assertAtMostOnePositional(positionals, command);
       return {
         ...requestRoot(root),
         operation: decodeSymbols(withOptional("language", options.get("language"), { query: positionals[0] }))
       };
     case "rename":
       assertAllowedOptions(options, ["file", "line", "character", "new-name", "root"], command);
+      assertNoPositionals(positionals, command);
       return {
         ...requestRoot(root),
         operation: decodeRename(
@@ -107,6 +112,7 @@ export function parseCliArgs(argv: string[]): BridgeRequest {
       };
     case "code-actions":
       assertAllowedOptions(options, ["file", "line", "character", "end-line", "end-character", "only", "root"], command);
+      assertNoPositionals(positionals, command);
       return {
         ...requestRoot(root),
         operation: decodeListCodeActions(
@@ -126,9 +132,11 @@ export function parseCliArgs(argv: string[]): BridgeRequest {
       };
     case "apply-code-action":
       assertAllowedOptions(options, ["id", "root"], command);
+      assertNoPositionals(positionals, command);
       return { ...requestRoot(root), operation: decodeApplyCodeAction({ id: options.get("id") }) };
     case "will-rename-files":
       assertAllowedOptions(options, ["old-path", "new-path", "renamed", "root"], command);
+      assertNoPositionals(positionals, command);
       return {
         ...requestRoot(root),
         operation: decodeWillRenameFiles(
@@ -151,6 +159,18 @@ function assertAllowedOptions(options: Map<string, string>, allowed: string[], c
   }
 }
 
+function assertNoPositionals(positionals: string[], command: string): void {
+  if (positionals.length > 0) {
+    throw new CliUsageError(`Command ${command} does not accept positional arguments: ${positionals[0]}`);
+  }
+}
+
+function assertAtMostOnePositional(positionals: string[], command: string): void {
+  if (positionals.length > 1) {
+    throw new CliUsageError(`Command ${command} accepts a single positional argument: ${positionals[0]}`);
+  }
+}
+
 function requestRoot(root: string | undefined): { root?: string } {
   return root !== undefined ? { root } : {};
 }
@@ -162,12 +182,17 @@ function symbolOrPosition(command: string, positionals: string[], options: Map<s
   const file = options.get("file");
   if (file !== undefined) input.file = file;
   const line = options.get("line");
-  if (line !== undefined) input.line = Number(line);
+  if (line !== undefined) input.line = parseDecimalNumber(line);
   const character = options.get("character");
-  if (character !== undefined) input.character = Number(character);
+  if (character !== undefined) input.character = parseDecimalNumber(character);
   const language = options.get("language");
   if (language !== undefined) input.language = language;
   return input;
+}
+
+/** Strict decimal parsing: hex/exponent forms (0x10, 1e3) never reach the decoder. */
+function parseDecimalNumber(raw: string): number {
+  return /^[0-9]+(\.[0-9]+)?$/.test(raw.trim()) ? Number(raw) : NaN;
 }
 
 function readRenamedFlag(value: string | undefined): boolean | undefined {

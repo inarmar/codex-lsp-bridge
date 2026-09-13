@@ -50,10 +50,10 @@ body:
     validations:
       required: true
   - type: textarea
-    id: doctor
+    id: status
     attributes:
-      label: Doctor output
-      description: Run `codex-lsp-bridge doctor --root .` in the affected workspace.
+      label: Bridge status output
+      description: Run `codex-lsp-bridge status --root .` in the affected workspace.
       render: json
     validations:
       required: true

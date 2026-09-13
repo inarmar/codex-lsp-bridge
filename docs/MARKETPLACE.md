@@ -48,7 +48,8 @@ After install, restart Codex and use:
 - It reads workspace files for LSP document synchronization.
 - It rejects files outside the active workspace root after realpath checks.
 - Detached worktrees require an explicit validated `root` argument.
-- Rename and code action tools are intentionally not part of the MVP.
+- Rename, code actions, apply-code-action, and file-rename sync are validated
+  edit commands; edits always flow through the Workspace Edit pipeline.
 
 ## Verification
 

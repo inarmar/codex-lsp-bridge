@@ -35,6 +35,40 @@ describe("language registry", () => {
     expect(config.workspaceRootPath).toBe(rootPath);
   });
 
+  it("prefers a nested workspace bin over a hoisted root bin and falls back to the bare command", async () => {
+    const { mkdtemp, mkdir, writeFile, symlink, rm } = await import("node:fs/promises");
+    const os = await import("node:os");
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-lsp-bin-"));
+    try {
+      const nestedBin = path.join(root, "frontend", "node_modules", ".bin");
+      const rootBin = path.join(root, "node_modules", ".bin");
+      await mkdir(nestedBin, { recursive: true });
+      await mkdir(rootBin, { recursive: true });
+      await writeFile(path.join(rootBin, "ts-server"), "#!/bin/sh\n", { mode: 0o755 });
+
+      const custom = LanguageRegistry.fromLanguageServers({
+        typescript: { ...defaultLanguageServers.typescript, workspacePath: "frontend", command: "ts-server" }
+      });
+
+      // Hoisted root bin resolves when no nested binary exists.
+      const hoisted = createLanguageServerConfig("typescript", custom.descriptor("typescript"), root);
+      expect(hoisted.server.command).toBe(path.join(rootBin, "ts-server"));
+
+      // Nested binary wins when it exists.
+      await writeFile(path.join(nestedBin, "ts-server"), "#!/bin/sh\n", { mode: 0o755 });
+      const nested = createLanguageServerConfig("typescript", custom.descriptor("typescript"), root);
+      expect(nested.server.command).toBe(path.join(nestedBin, "ts-server"));
+
+      // No local binary: the bare command is returned (PATH resolution is spawn's job).
+      await rm(rootBin, { recursive: true, force: true });
+      await rm(nestedBin, { recursive: true, force: true });
+      const bare = createLanguageServerConfig("typescript", custom.descriptor("typescript"), root);
+      expect(bare.server.command).toBe("ts-server");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects language server workspaces outside the workspace root", () => {
     const rootPath = path.resolve("fake-repo");
 

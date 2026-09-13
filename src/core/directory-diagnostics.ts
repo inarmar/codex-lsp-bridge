@@ -47,7 +47,9 @@ export class DirectoryDiagnostics {
   async collect(request: DirectoryDiagnosticsRequest): Promise<DirectoryDiagnosticsResult> {
     const maxFiles = request.maxFiles ?? this.config.maxFiles;
     const timeoutBudgetMs = request.timeoutBudgetMs ?? this.config.timeoutBudgetMs;
-    const concurrency = request.concurrency ?? this.config.concurrency;
+    // Guard the batching loop against degenerate injected values (decoders and
+    // config already enforce positive integers on the public paths).
+    const concurrency = Math.max(1, Math.floor(request.concurrency ?? this.config.concurrency));
     const extensions = this.registry.extensions();
     const startedAt = Date.now();
     const sourceFiles = await this.readCachedSourceFiles(request.dir, maxFiles, extensions);
@@ -169,6 +171,6 @@ function filterDiagnosticSummary(summary: DiagnosticSummary, severity: Severity 
       hint: items.filter((item) => item.severity === "hint").length
     },
     items,
-    summary: items.slice(0, 10).map((item, index) => `${index + 1}. ${item.severity.toUpperCase()}`)
+    summary: items.slice(0, 10).map((item, index) => `${index + 1}. ${item.severity.toUpperCase()} ${item.file}:${item.line}:${item.character} ${item.message}`)
   };
 }

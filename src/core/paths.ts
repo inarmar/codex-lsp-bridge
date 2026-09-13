@@ -26,6 +26,9 @@ export class WorkspacePathError extends Error {
 
 /** Canonical Workspace Root: an existing directory, realpath'd, no marker checks. */
 export async function resolveWorkspaceRoot(input: string): Promise<string> {
+  if (input.trim().length === 0) {
+    throw new WorkspacePathError("Workspace root must not be empty");
+  }
   const candidate = path.resolve(input);
   let realPath: string;
   try {

@@ -36,6 +36,7 @@ skill: ubiquitous-language
 - **Bridge Operation** `BridgeOperation` kind:value
 - **Bridge Request** `BridgeRequest` kind:value
 - **Bridge Status** `BridgeStatus` kind:service
+- **CLI Usage Error** `CliUsageError` kind:concept
 - **Command Service** `CommandService` kind:service
 - **Code Action** `CodeAction` kind:command
 - **Code Action Cache** `CodeActionCache` kind:concept
@@ -43,6 +44,8 @@ skill: ubiquitous-language
 - **Apply Code Action** `applyCodeAction` kind:command
 - **Default Language Servers** `defaultLanguageServers` kind:value
 - **Definition** `Definition` kind:query
+- **Definition At** `definitionAt` kind:query
+- **Definition By Symbol** `definitionBySymbol` kind:query
 - **Diagnostic** `Diagnostic` kind:value
 - **Diagnostic Conclusion** `DiagnosticConclusion` kind:state avoid: `verdict`
 - **Diagnostic Report** `DiagnosticReport` kind:value avoid: `DiagnosticResult`
@@ -54,6 +57,8 @@ skill: ubiquitous-language
 - **Document Position** `DocumentPosition` kind:value
 - **File Rename Sync** `FileRenameSync` kind:process
 - **Hover** `Hover` kind:query
+- **Hover At** `hoverAt` kind:query
+- **Hover By Symbol** `hoverBySymbol` kind:query
 - **Hover Info** `HoverInfo` kind:value avoid: `HoverResult`
 - **Install Hint** `InstallHint` kind:concept
 - **Known Diagnostics** `KnownDiagnostics` kind:value
@@ -66,8 +71,13 @@ skill: ubiquitous-language
 - **LSP Client** `LspClient` kind:service
 - **LSP Provider Registry** `LspProviderRegistry` kind:service
 - **Location** `Location` kind:value
+- **Operation Parse Error** `OperationParseError` kind:concept
 - **Post-Tool Diagnostics** `PostToolDiagnostics` kind:process avoid: `postToolUseHook`
 - **References** `References` kind:query
+- **References At** `referencesAt` kind:query
+- **References By Symbol** `referencesBySymbol` kind:query
+- **List Code Actions** `listCodeActions` kind:command
+- **Rename At** `renameAt` kind:command
 - **Semantic Provider** `SemanticProvider` kind:service avoid: `LspService`, `SemanticLayer`
 - **Server Request** `ServerRequest` kind:concept
 - **Severity** `Severity` kind:value
@@ -80,9 +90,11 @@ skill: ubiquitous-language
 - **Symbol Rename** `SymbolRename` kind:command
 - **Symbols** `Symbols` kind:query avoid: `WorkspaceSymbol`
 - **Timeout Budget** `TimeoutBudget` kind:value avoid: `timeoutMs` (that is Diagnostics Timeout Policy)
+- **Will Rename Files** `willRenameFiles` kind:process
 - **Workspace Command Service** `WorkspaceCommandService` kind:service
 - **Workspace Edit** `WorkspaceEdit` kind:value
-- **Workspace Path Resolver** `resolveWorkspacePath` kind:service avoid: `resolveFileInsideRoot`
+- **Workspace Path Error** `WorkspacePathError` kind:concept
+- **Workspace Path Resolver** `resolveWorkspaceFile` kind:service avoid: `resolveFileInsideRoot`
 - **Workspace Root** `WorkspaceRoot` kind:concept avoid: `projectRoot`
 - **Workspace Root Resolution** `resolveWorkspaceRoot` kind:service
 - **Workspace Runtime** `WorkspaceRuntime` kind:service avoid: `BridgeRuntime`
@@ -234,7 +246,7 @@ skill: ubiquitous-language
 
 ### Workspace Path Resolver
 
-- **Definition**: Shared resolvers turning transport path input into a canonical absolute path inside the Workspace Root (`resolveWorkspaceFile`, `resolveWorkspaceDirectory`, `resolveWorkspaceTarget`): relative input resolves against the root, absolute input is allowed, existing targets are realpath-checked for symlink escapes, and the target for a not-yet-existing file (create/rename target) is validated by realpath of its nearest existing parent. Containment uses the Workspace Root, not `process.cwd()`.
+- **Definition**: Shared resolvers turning transport path input into a canonical absolute path inside the Workspace Root (`resolveWorkspaceFile`, `resolveWorkspaceDirectory`, `resolveWorkspaceTarget` — all members of one capability): relative input resolves against the root, absolute input is allowed, existing targets are realpath-checked for symlink escapes, and the target for a not-yet-existing file (create/rename target) is validated by realpath of its nearest existing parent. Containment uses the Workspace Root, not `process.cwd()`.
 - **NOT**: Path syntax parsing inside transports; the Workspace Edit pipeline still applies edits, but uses the same containment semantics.
 - **Related**: Workspace Root, Workspace Edit
 

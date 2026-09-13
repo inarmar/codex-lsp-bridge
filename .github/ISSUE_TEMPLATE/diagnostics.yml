@@ -37,9 +37,9 @@ body:
     validations:
       required: true
   - type: textarea
-    id: doctor
+    id: status
     attributes:
-      label: Doctor output
+      label: Bridge status output
       render: json
     validations:
       required: true

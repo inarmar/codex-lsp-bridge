@@ -308,7 +308,12 @@ describe("schema ↔ decoder conformance (mandatory)", () => {
       if (enumValues && !enumValues.includes(value)) return false;
       return true;
     }
-    if (schema.type === "number") return typeof value === "number" && Number.isFinite(value);
+    if (schema.type === "number") {
+      if (typeof value !== "number" || !Number.isFinite(value)) return false;
+      if (schema.minimum !== undefined && value < (schema.minimum as number)) return false;
+      if (schema.multipleOf !== undefined && value % (schema.multipleOf as number) !== 0) return false;
+      return true;
+    }
     if (schema.type === "boolean") return typeof value === "boolean";
     return false;
   }
@@ -377,6 +382,16 @@ describe("schema ↔ decoder conformance (mandatory)", () => {
         const withWrong = { ...baseline, [field]: wrongValue };
         expect(schemaAccepts(schema, withWrong), `schema accepts ${name}.${field}=${String(wrongValue)}`).toBe(false);
         expect(decodedOk(name, withWrong), `decoder accepts ${name}.${field}=${String(wrongValue)}`).toBe(false);
+
+        // Numeric fields: zero and fractional values rejected by both
+        // (schema minimum/multipleOf mirror the decoder's positive integers).
+        if (fieldType === "number") {
+          for (const invalid of [0, -1, 1.5]) {
+            const withInvalidNumber = { ...baseline, [field]: invalid };
+            expect(schemaAccepts(schema, withInvalidNumber), `schema accepts ${name}.${field}=${invalid}`).toBe(false);
+            expect(decodedOk(name, withInvalidNumber), `decoder accepts ${name}.${field}=${invalid}`).toBe(false);
+          }
+        }
 
         // Right-type probe only for non-enum and non-positional-pairing fields:
         // enums and symbol/position pairing are cross-field rules covered below.

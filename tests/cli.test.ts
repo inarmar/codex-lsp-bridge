@@ -16,6 +16,11 @@ describe("parseCliArgs", () => {
     });
   });
 
+  it("rejects file diagnostics without a target file (no no-target mode)", () => {
+    expect(() => parseCliArgs(["diagnostics"])).toThrow("file parameter is required");
+    expect(() => parseCliArgs(["diagnostics", "--timeout-ms", "5000"])).toThrow("file parameter is required");
+  });
+
   it("rejects directory-only options on file diagnostics", () => {
     expect(() => parseCliArgs(["diagnostics", "--file", "src/a.ts", "--timeout-budget-ms", "100"])).toThrow(
       "Unknown option --timeout-budget-ms for command diagnostics"
@@ -171,5 +176,35 @@ describe("parseCliArgs", () => {
   it("requires a value for options and a command", () => {
     expect(() => parseCliArgs([])).toThrow("Missing command");
     expect(() => parseCliArgs(["status", "--root"])).toThrow("Option --root requires a value");
+  });
+
+  it("rejects positional arguments for commands that do not declare them", () => {
+    expect(() => parseCliArgs(["status", "foo"])).toThrow("does not accept positional arguments");
+    expect(() => parseCliArgs(["diagnostics", "foo", "--file", "src/a.ts"])).toThrow("does not accept positional arguments");
+    expect(() => parseCliArgs(["directory-diagnostics", "extra", "--dir", "src"])).toThrow("does not accept positional arguments");
+    expect(() => parseCliArgs(["apply-code-action", "extra", "--id", "ca-1"])).toThrow("does not accept positional arguments");
+    expect(() => parseCliArgs(["rename", "extra", "--file", "src/a.ts", "--line", "1", "--character", "1", "--new-name", "x"])).toThrow(
+      "does not accept positional arguments"
+    );
+  });
+
+  it("rejects multi-value positionals for symbol commands", () => {
+    expect(() => parseCliArgs(["symbols", "a", "b"])).toThrow("accepts a single positional argument");
+    expect(() => parseCliArgs(["definition", "a", "b"])).toThrow("accepts a single symbol argument");
+  });
+
+  it("rejects hex and exponent numeric forms exactly like JSON numbers", () => {
+    expect(() => parseCliArgs(["diagnostics", "--file", "src/a.ts", "--timeout-ms", "0x10"])).toThrow(
+      "must be a positive integer"
+    );
+    expect(() => parseCliArgs(["diagnostics", "--file", "src/a.ts", "--timeout-ms", "1e3"])).toThrow(
+      "must be a positive integer"
+    );
+    expect(() => parseCliArgs(["definition", "--file", "src/a.ts", "--line", "0x2", "--character", "1"])).toThrow(
+      "must be a positive integer"
+    );
+    expect(() => parseCliArgs(["directory-diagnostics", "--dir", "src", "--concurrency", "0x2"])).toThrow(
+      "must be a positive integer"
+    );
   });
 });

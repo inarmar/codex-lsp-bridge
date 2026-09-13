@@ -50,7 +50,9 @@ For source-file moves or renames:
 1. Call `lsp_will_rename_files(old_path, new_path)`.
 2. Let the bridge validate and apply the returned `WorkspaceEdit`.
 3. Perform the physical file move or rename.
-4. Notify the language server with `workspace/didRenameFiles` when supported.
+4. Call `lsp_will_rename_files(old_path, new_path, renamed: true)` so the
+   bridge notifies the language server (`workspace/didRenameFiles`) and
+   re-opens the moved document.
 5. Run `lsp_diagnostics` on affected files.
 
 `lsp_will_rename_files` updates semantic references; it does not move the file.

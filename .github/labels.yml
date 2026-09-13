@@ -15,7 +15,7 @@
   description: Maintainer-approved contribution opportunity.
 - name: needs reproduction
   color: fbca04
-  description: Needs exact commands, tool call, workspace shape, or doctor output.
+  description: Needs exact commands, tool call, workspace shape, or bridge status output.
 - name: security
   color: b60205
   description: Security-sensitive report or fix.

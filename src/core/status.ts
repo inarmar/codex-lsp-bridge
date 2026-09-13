@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLanguageServerConfig, LanguageRegistry, resolveLanguageServerWorkspace } from "../adapters/language-registry.js";
+import { createLanguageServerConfig, findServerExecutable, LanguageRegistry, resolveLanguageServerWorkspace } from "../adapters/language-registry.js";
 import { loadConfig, configFile } from "./config.js";
 import { resolveDiagnosticsTimeout, type ResolvedDiagnosticsTimeout } from "./diagnostics-timeout.js";
 import type { WorkspaceRuntime } from "./workspace-runtime.js";
@@ -119,12 +119,8 @@ function findExecutable(languageServerWorkspace: string, workspaceRootPath: stri
     return isExecutable(command) ? command : undefined;
   }
 
-  for (const directory of [
-    path.join(languageServerWorkspace, "node_modules", ".bin"),
-    path.join(workspaceRootPath, "node_modules", ".bin")
-  ]) {
-    if (isExecutable(path.join(directory, command))) return path.join(directory, command);
-  }
+  const local = findServerExecutable(languageServerWorkspace, workspaceRootPath, command);
+  if (local) return local;
 
   const pathEntries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
   const extensions = process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""];

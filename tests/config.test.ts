@@ -72,6 +72,27 @@ describe("config", () => {
     });
   });
 
+  it("rejects fractionals and non-positive integers in directory diagnostics defaults", async () => {
+    rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
+    homePath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-home-"));
+    process.env.CODEX_HOME = path.join(homePath, ".codex");
+    await fs.mkdir(process.env.CODEX_HOME, { recursive: true });
+    await fs.writeFile(
+      path.join(process.env.CODEX_HOME, configFile),
+      JSON.stringify({
+        directoryDiagnostics: { concurrency: 1.5, maxFiles: 10, timeoutBudgetMs: -1 },
+        hook: { maxFiles: 2.5 }
+      })
+    );
+
+    expect(loadConfig(rootPath).directoryDiagnostics).toEqual({
+      maxFiles: 10,
+      timeoutBudgetMs: 15000,
+      concurrency: 2
+    });
+    expect(loadConfig(rootPath).hook.maxFiles).toBe(5);
+  });
+
   it("accepts auto diagnostics timeout policy", async () => {
     rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
     homePath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-home-"));

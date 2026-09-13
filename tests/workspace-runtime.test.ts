@@ -32,6 +32,11 @@ describe("resolveWorkspaceRoot", () => {
     await expect(resolveWorkspaceRoot(filePath)).rejects.toThrow("not a directory");
   });
 
+  it("rejects an empty root rather than silently falling back to the cwd", async () => {
+    await expect(resolveWorkspaceRoot("")).rejects.toThrow("must not be empty");
+    await expect(resolveWorkspaceRoot("   ")).rejects.toThrow("must not be empty");
+  });
+
   it("canonicalizes a symlinked root via realpath", async () => {
     const realRoot = await makeRoot();
     const alias = path.join(os.tmpdir(), `codex-lsp-root-alias-${Date.now()}`);

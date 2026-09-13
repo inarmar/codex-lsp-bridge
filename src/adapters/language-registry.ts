@@ -248,11 +248,21 @@ export function resolveLanguageServerWorkspace(rootPath: string, workspacePath: 
   return resolved;
 }
 
-function resolveServerCommand(languageServerWorkspace: string, workspaceRootPath: string, command: string): string {
+/**
+ * Finds a locally installed server binary: Language Server Workspace
+ * `node_modules/.bin` first, then Workspace Root `node_modules/.bin`
+ * (win32 `.cmd` variants included). The single source of truth for the
+ * local-binary search, shared by provider spawn resolution and Bridge Status.
+ */
+export function findServerExecutable(languageServerWorkspace: string, workspaceRootPath: string, command: string): string | undefined {
   for (const directory of [path.join(languageServerWorkspace, "node_modules", ".bin"), path.join(workspaceRootPath, "node_modules", ".bin")]) {
     const localCommand = path.join(directory, command);
     if (fs.existsSync(localCommand)) return localCommand;
     if (process.platform === "win32" && fs.existsSync(`${localCommand}.cmd`)) return `${localCommand}.cmd`;
   }
-  return command;
+  return undefined;
+}
+
+function resolveServerCommand(languageServerWorkspace: string, workspaceRootPath: string, command: string): string {
+  return findServerExecutable(languageServerWorkspace, workspaceRootPath, command) ?? command;
 }

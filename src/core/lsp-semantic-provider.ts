@@ -794,7 +794,10 @@ export class LspSemanticProvider implements SemanticProvider {
       file: uriToFilePath(location.uri),
       line: location.range.start.line + 1,
       character: location.range.start.character + 1,
-      range: location.range
+      range: {
+        start: { line: location.range.start.line + 1, character: location.range.start.character + 1 },
+        end: { line: location.range.end.line + 1, character: location.range.end.character + 1 }
+      }
     };
   }
 }

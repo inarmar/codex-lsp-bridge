@@ -228,7 +228,12 @@ export function listTools(): unknown[] {
   }));
 }
 
-/** JSON Schema for a tool, derived from the same spec the decoder validates. */
+/**
+ * JSON Schema for a tool, derived from the same spec the decoder validates.
+ * Cross-field rules (symbol vs position pairing, partial positions) cannot be
+ * expressed in this static schema subset; they are decoder-enforced and
+ * covered by per-tool behavior tests (see the conformance suite).
+ */
 function buildInputSchema(fields: ToolField[]): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
@@ -238,6 +243,12 @@ function buildInputSchema(fields: ToolField[]): Record<string, unknown> {
         ? { type: "array", items: { type: "string" } }
         : { type: field.type };
     if (field.enumValues) schema.enum = field.enumValues;
+    // Canonical numeric fields are positive integers; keep the schema at least
+    // as strict as the decoder for the allowed range.
+    if (field.type === "number") {
+      schema.minimum = 1;
+      schema.multipleOf = 1;
+    }
     if (field.description) schema.description = field.description;
     properties[field.name] = schema;
     if (field.required) required.push(field.name);
