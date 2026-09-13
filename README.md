@@ -71,30 +71,27 @@ For Rust:
 rustup component add rust-analyzer
 ```
 
-Install and register the Codex integration:
+Install and register the Codex integration. The npm package intentionally ships
+no installer commands — registration is three small manual edits (exact
+snippets in "Codex Registration" below):
 
 ```bash
 npm install -g codex-lsp-bridge
-codex-lsp-bridge install --auto-update
-codex-lsp-bridge doctor --root .
+# ~/.codex/config.toml  — MCP server registration
+# ~/.codex/hooks.json   — PostToolUse diagnostics hook
+# ~/.codex/AGENTS.md    — workflow instructions (optional)
+codex-lsp-bridge status --root .
 ```
 
-For a Rust-first setup, the installer can ask `rustup` to install
-`rust-analyzer` during setup:
+Restart Codex. The `lsp_diagnostics`, `lsp_directory_diagnostics`,
+`lsp_definition`, `lsp_references`, `lsp_symbols`, `lsp_hover`, `lsp_status`,
+`lsp_rename`, `lsp_code_actions`, and `lsp_apply_code_action` MCP tools are
+then available.
+
+If you do not want a global install, run the package on demand:
 
 ```bash
-npm install -g codex-lsp-bridge
-codex-lsp-bridge install --auto-update --with-rust-analyzer
-codex-lsp-bridge doctor --root .
-```
-
-Restart Codex. The `lsp_diagnostics`, `lsp_definition`, `lsp_references`,
-`lsp_symbols`, `lsp_hover`, and `lsp_status` MCP tools are then available.
-
-If you do not want a global install, use npm directly:
-
-```bash
-npx codex-lsp-bridge@latest install --auto-update
+npx --yes codex-lsp-bridge@latest status --root .
 ```
 
 ## Verify
@@ -102,7 +99,7 @@ npx codex-lsp-bridge@latest install --auto-update
 From any project:
 
 ```bash
-codex-lsp-bridge doctor --root .
+codex-lsp-bridge status --root .
 codex-lsp-bridge diagnostics --file src/file.ts --timeout-ms 15000 --root .
 ```
 
@@ -111,12 +108,14 @@ restart, Codex can call:
 
 - `lsp_status`
 - `lsp_diagnostics`
+- `lsp_directory_diagnostics`
 - `lsp_definition`
 - `lsp_references`
 - `lsp_symbols`
 - `lsp_hover`
 - `lsp_rename`
 - `lsp_code_actions`
+- `lsp_apply_code_action`
 - `lsp_will_rename_files`
 
 ## Editing Commands
@@ -127,7 +126,9 @@ versions, ranges, and file-operation preconditions, then applies it. Codex must
 not reproduce or apply returned edits manually.
 
 - `lsp_rename`: rename a symbol at a file position.
-- `lsp_code_actions`: list actions or apply one by zero-based index.
+- `lsp_code_actions`: list actions at a cursor position; each action returns a
+  stable handle (`id`). Apply one with `lsp_apply_code_action`. Stale actions
+  (the source file changed after listing) are rejected.
 - `lsp_will_rename_files`: request import updates before a physical move, then
   call again with `renamed: true` after Codex performs that move.
 
@@ -155,8 +156,8 @@ The MVP is intentionally narrow and ready for local always-on use.
 - Semantic edits are accepted only from server-returned WorkspaceEdits.
 - Physical file moves remain Codex's responsibility in the minimal file-rename
   contract.
-- No broad automatic language server installation; `--with-rust-analyzer` is a
-  narrow explicit Rust setup helper
+- No bundled installer: Codex registration is manual (three config entries
+  described below) or via the Codex plugin package.
 
 ## Requirements
 
@@ -202,37 +203,22 @@ channel = "stable"
 components = ["rust-analyzer"]
 ```
 
-`lsp_status` and `codex-lsp-bridge doctor --root .` report the detected
-language-server command, support level, seed file, install hint, and actionable
-recommendations for missing setup.
+`lsp_status` and `codex-lsp-bridge status --root .` report the detected
+language-server command, support level, Language Server Workspace, seed file,
+install hint, and actionable recommendations for missing setup.
 
 ## Install Options
 
-Recommended install:
+Global install:
 
 ```bash
 npm install -g codex-lsp-bridge
-codex-lsp-bridge install --auto-update
 ```
 
-Rust-first install that also asks `rustup` to install `rust-analyzer` when it is
-missing:
+One-shot usage without a global install:
 
 ```bash
-npm install -g codex-lsp-bridge
-codex-lsp-bridge install --auto-update --with-rust-analyzer
-```
-
-One-shot install through npm:
-
-```bash
-npx codex-lsp-bridge@latest install --auto-update
-```
-
-One-shot Rust-first install:
-
-```bash
-npx codex-lsp-bridge@latest install --auto-update --with-rust-analyzer
+npx --yes codex-lsp-bridge@latest status --root .
 ```
 
 From a local checkout:
@@ -240,30 +226,12 @@ From a local checkout:
 ```bash
 npm install
 npm run build
-npm exec -- codex-lsp-bridge install
+npm exec -- codex-lsp-bridge status --root .
 ```
 
-From a globally installed package:
-
-```bash
-codex-lsp-bridge install
-```
-
-Preview the generated Codex config without writing files:
-
-```bash
-codex-lsp-bridge install --dry-run
-```
-
-The installer writes:
-
-- `~/.codex/config.toml`: global MCP server registration
-- `~/.codex/hooks.json`: `PostToolUse` hook for touched supported source-file diagnostics
-- `~/.codex/AGENTS.md`: managed workflow instructions that tell Codex to use
-  LSP diagnostics during review, audit, and investigation workflows, not only
-  after edits
-
-Restart Codex after installing.
+Register the package with Codex as described in "Codex Registration" below,
+or install it as a Codex plugin when a marketplace entry is available
+("Codex Plugin Package"). Restart Codex after registering.
 
 ## Codex Plugin Package
 
@@ -281,37 +249,22 @@ When a marketplace entry is available, Codex CLI installs plugins with:
 codex plugin add codex-lsp-bridge@<marketplace>
 ```
 
-Until then, use the `npx codex-lsp-bridge@latest install` path above. It writes
-the same MCP registration, hook, and workflow instructions directly into
-`~/.codex`.
+Until then, register manually as described in "Codex Registration" below.
 
 ## Uninstall
 
-Remove the MCP server registration and automatic diagnostics hook:
+Remove the three entries you added during registration (see "Codex
+Registration"): the `[mcp_servers.codex-lsp-bridge]` block in
+`~/.codex/config.toml`, the `codex-lsp-bridge:post-tool-diagnostics` hook in
+`~/.codex/hooks.json`, and the managed `codex-lsp-bridge` section in
+`~/.codex/AGENTS.md`. Leave unrelated Codex config and instructions intact.
 
-```bash
-npx codex-lsp-bridge@latest uninstall
-```
+## Codex Registration
 
-For a local checkout or global install:
+Registration is manual: add the MCP server, the PostToolUse diagnostics hook,
+and the workflow instructions. Restart Codex afterwards.
 
-```bash
-codex-lsp-bridge uninstall
-```
-
-Preview the removal first:
-
-```bash
-codex-lsp-bridge uninstall --dry-run
-```
-
-The uninstall command removes only the `codex-lsp-bridge` config block and hook
-entry, plus the managed `codex-lsp-bridge` block in `~/.codex/AGENTS.md`. It
-leaves unrelated Codex config and instructions intact.
-
-## What Gets Installed
-
-By default, the global MCP config points Codex at the built server:
+Local install points Codex at the built server:
 
 ```toml
 [mcp_servers.codex-lsp-bridge]
@@ -322,7 +275,8 @@ args = [
 ]
 ```
 
-With `--auto-update`, the global MCP config points Codex at npm instead:
+A global package can be referenced through npm instead, which lets other users
+receive updates after restarting Codex:
 
 ```toml
 [mcp_servers.codex-lsp-bridge]
@@ -337,17 +291,16 @@ args = [
 ]
 ```
 
-That mode lets other users receive package updates after restarting Codex,
-without manually reinstalling the MCP config. It depends on npm package
-resolution, so use the default local install mode for active local development.
+That mode depends on npm package resolution, so prefer the local install mode
+for active local development.
 
 Without `--root`, the server uses the Codex process working directory as the
 workspace root. That makes one global registration usable from any repository.
 MCP tool calls do not infer a new workspace root from `file` or `dir` paths.
 For detached review worktrees such as `/tmp/pr-1558-review`, pass `root`
-explicitly in the tool call. Explicit `root` values must point at a
-recognizable workspace containing `.git`, `package.json`, `tsconfig.json`, or
-`Cargo.toml`.
+explicitly in the tool call. Explicit `root` values are any existing directory
+canonicalized with `realpath`; project markers (`.git`, `package.json`,
+`tsconfig.json`, `Cargo.toml`) are intentionally **not** required or checked.
 
 The hook runs after edit tools and checks touched supported source files:
 
@@ -393,19 +346,19 @@ Hook output is intentionally quiet:
 - repeated identical error output is deduplicated
 - `CODEX_LSP_HOOK_MAX_FILES` limits touched-file fanout, default `5`
 
-The installer also adds a managed `codex-lsp-bridge` section to
-`~/.codex/AGENTS.md`. That section is what makes review, audit, and
-investigation workflows ask for semantic diagnostics even when no file edit has
-happened yet.
+The recommended registration also adds a managed `codex-lsp-bridge` section to
+`~/.codex/AGENTS.md` (it is optional). That section is what makes review,
+audit, and investigation workflows ask for semantic diagnostics even when no
+file edit has happened yet.
 
 ## CLI Usage
 
 Run against the current repository:
 
 ```bash
-codex-lsp-bridge doctor --root .
+codex-lsp-bridge status --root .
 codex-lsp-bridge diagnostics --file src/file.ts --timeout-ms 15000 --root .
-codex-lsp-bridge diagnostics --dir src --severity error --max-files 50 --timeout-budget-ms 15000 --concurrency 2 --root .
+codex-lsp-bridge directory-diagnostics --dir src --severity error --max-files 50 --timeout-budget-ms 15000 --concurrency 2 --root .
 codex-lsp-bridge symbols Editor --root .
 codex-lsp-bridge definition Editor --root .
 codex-lsp-bridge references Editor --root .
@@ -420,19 +373,25 @@ codex-lsp-bridge references --file src/store/editor.ts --line 24 --character 14 
 codex-lsp-bridge hover --file src/store/editor.ts --line 24 --character 14 --root .
 ```
 
-Choose another language:
+Choose another language for symbol-only lookups:
 
 ```bash
-codex-lsp-bridge diagnostics --file src/main.rs --language rust --root .
-codex-lsp-bridge definition --file src/main.rs --line 12 --character 8 --root .
-codex-lsp-bridge references --file src/main.rs --line 12 --character 8 --root .
-codex-lsp-bridge diagnostics --file app.py --language python --root .
-codex-lsp-bridge diagnostics --file main.go --root .
+codex-lsp-bridge definition Editor --language rust --root .
+codex-lsp-bridge references Editor --language python --root .
+codex-lsp-bridge symbols Editor --language go --root .
 ```
 
 File-position commands and file diagnostics auto-detect the language from the
-file extension. Symbol-only commands use TypeScript by default unless
+file extension; `--language` there is rejected (the file determines the
+language). Symbol-only commands use the configured default language unless
 `--language` is provided.
+
+Code actions list and apply by stable handle:
+
+```bash
+codex-lsp-bridge code-actions --file src/editor.ts --line 24 --character 14 --only quickfix --root .
+codex-lsp-bridge apply-code-action --id ca-1 --root .
+```
 
 Diagnostics include trust metadata:
 
@@ -472,15 +431,22 @@ Available tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `lsp_diagnostics` | Return compressed diagnostics with trust metadata |
-| `lsp_definition` | Find definition by symbol or file position; prefer position |
-| `lsp_references` | Find references by symbol or file position; prefer position |
-| `lsp_symbols` | Search workspace symbols; accepts optional `root` |
-| `lsp_hover` | Return hover/type information |
-| `lsp_status` | Return language server, Codex install, and build status |
+| `lsp_diagnostics` | File diagnostics for one file with trust metadata; `file` required |
+| `lsp_directory_diagnostics` | Bounded recursive scan over File Diagnostics (`dir`, `severity`, `maxFiles`, `timeoutBudgetMs`, `concurrency`) |
+| `lsp_definition` | Find definition by symbol (optional `language`) or by file position; exactly one mode |
+| `lsp_references` | Find references by symbol (optional `language`) or by file position; exactly one mode |
+| `lsp_symbols` | Search workspace symbols; accepts optional `language` |
+| `lsp_hover` | Return hover/type information by symbol or file position |
+| `lsp_rename` | Rename a symbol at a file position |
+| `lsp_code_actions` | List actions at a cursor position; returns stable handles |
+| `lsp_apply_code_action` | Apply a listed action by handle; stale/expired handles are rejected |
+| `lsp_will_rename_files` | File-rename synchronization (before/after the physical move) |
+| `lsp_status` | Resolved config, language servers, Codex install, and build status |
 
-For file diagnostics in large workspaces, pass `timeoutMs` when the default
-`diagnosticsTimeoutMs` is too short:
+File diagnostics require `file`; the retired no-target mode ("diagnostics for
+everything currently open") is not part of the contract. For file diagnostics in
+large workspaces, pass `timeoutMs` when the default `diagnosticsTimeoutMs` is
+too short:
 
 ```json
 {
@@ -562,7 +528,34 @@ workspace hints:
 
 Auto mode starts at 15000 ms and increases for monorepo markers, TypeScript
 project references, and large sampled source trees. It is capped at 60000 ms.
-`codex-lsp-bridge doctor --root .` reports the resolved timeout and reasons.
+`codex-lsp-bridge status --root .` reports the resolved timeout and reasons.
+
+Directory Diagnostics defaults live in config too (`maxFiles`, `timeoutBudgetMs`,
+`concurrency`):
+
+```json
+{
+  "directoryDiagnostics": {
+    "maxFiles": 100,
+    "timeoutBudgetMs": 30000,
+    "concurrency": 4
+  }
+}
+```
+
+For a nested frontend workspace in a monorepo, point the TypeScript language
+server at its own workspace root (server cwd, LSP root, and seed search — the
+workspace containment boundary stays the bridge Workspace Root):
+
+```json
+{
+  "languageServers": {
+    "typescript": {
+      "workspacePath": "frontend"
+    }
+  }
+}
+```
 
 ### Adding a language server
 
@@ -585,7 +578,7 @@ rest is optional:
 ```
 
 After that, diagnostics, definitions, references, symbols, hover, the
-post-tool hook, and `doctor` treat `.zig` like any built-in language. Entries
+post-tool hook, and `status` treat `.zig` like any built-in language. Entries
 merge field by field over the defaults layer (global config, then workspace
 config), so `"rust": { "command": "my-analyzer" }` replaces only the command.
 A field is replaced as a whole, not per element. Unknown languages with
@@ -601,10 +594,10 @@ codex-lsp-bridge diagnostics --file src/file.ts --timeout-ms 30000 --root .
 For MCP tool calls, pass `timeoutMs` on `lsp_diagnostics`. Directory diagnostics
 use `timeoutBudgetMs` instead because they have a scan-wide wall-clock budget.
 
-For TypeScript, a workspace-local
-`node_modules/.bin/typescript-language-server` is preferred when present, then
-the configured command or PATH command is used. Rust uses the configured
-`rust-analyzer` command or the PATH command.
+For TypeScript, the executable is searched in the Language Server Workspace
+`node_modules/.bin`, then the Workspace Root `node_modules/.bin`, then PATH —
+so both nested dependencies and hoisted monorepo dependencies work. Rust uses
+its configured command or PATH.
 
 ## Plugin Layout
 
@@ -615,8 +608,9 @@ The package includes plugin-oriented metadata:
 - `hooks/hooks.json`
 - `skills/lsp/SKILL.md`
 
-These files mirror the one-command installer and make the package easier to
-adapt to Codex plugin distribution flows.
+These files make the package easy to adapt to Codex plugin distribution
+flows; until a marketplace entry exists, register them manually as described
+in "Codex Registration".
 
 See [docs/MARKETPLACE.md](./docs/MARKETPLACE.md) for marketplace packaging
 notes.
@@ -658,19 +652,23 @@ printf '%s\n' \
 ## Design Notes
 
 - The bridge is read-only.
-- File access is constrained to the workspace root. The bridge resolves both
-  the workspace root and requested files with `fs.realpath` before reading, so
-  symlinks cannot be used to read files outside the workspace.
+- File access is constrained to the workspace root. The bridge resolves the
+  workspace root and requested files with `realpath`; symlink escapes are
+  blocked, including create targets whose nearest existing parent escapes the
+  root.
 - MCP file and directory requests use the MCP server root unless the request
-  includes an explicit validated `root`. The bridge does not infer trust
-  boundaries from arbitrary absolute file paths.
+  includes an explicit `root` workspace selector. The bridge does not infer
+  trust boundaries from arbitrary absolute file paths.
+- The Workspace Root is a canonicalized directory without project-marker
+  checks; the Language Server Workspace (per-language `workspacePath`) may
+  differ from it.
 - Directory diagnostics are bounded by default: at most 50 source files, a
-  15000 ms wall-clock budget, and 2 concurrent file diagnostics. Override these
+  15000 ms scheduling budget, and 2 concurrent file diagnostics. Override these
   with `maxFiles`, `timeoutBudgetMs`, and `concurrency` when a wider scan is
-  intentional. Results include directory metadata so truncated scans are not
-  mistaken for full-workspace validation. Top-level `timedOut` means either
-  the directory budget expired or at least one file diagnostic timed out;
-  `directory.budgetTimedOut` only describes the directory scan budget.
+  intentional. Once the budget is exhausted no new files are scheduled, but
+  already-running requests may finish — so the budget is a scheduling budget,
+  not a hard wall-clock deadline. Results include directory metadata so
+  truncated scans are not mistaken for full-workspace validation.
 - Directory scans keep a short in-process source-file-list cache for repeated
   MCP calls against the same directory and limit. Diagnostic results themselves
   are not cached, so edited file feedback still comes from the language server.
@@ -696,9 +694,9 @@ printf '%s\n' \
 `codex-lsp-bridge` does not intentionally execute project code. It starts local
 language server processes and reads workspace files needed for document sync.
 
-The installer modifies Codex config only when explicitly run. Use
-`codex-lsp-bridge-install --dry-run` before writing config if you want to review
-the changes.
+The npm package ships no installer: Codex config is modified only by you,
+manually, during registration. Review the snippets in "Codex Registration"
+before writing them into `~/.codex`.
 
 Language servers are external executables. Install them from trusted sources.
 

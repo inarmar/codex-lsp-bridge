@@ -6,7 +6,6 @@ import { createLanguageServerConfig } from "../src/adapters/language-registry.js
 import { defaultLanguageServers } from "../src/adapters/default-language-servers.js";
 import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-bridge.js";
 import { LspSemanticProvider } from "../src/core/lsp-semantic-provider.js";
-import { filePathToUri } from "../src/utils/uri.js";
 
 const shouldRunRustAnalyzerIntegration = process.env.CODEX_LSP_RUN_RUST_ANALYZER_INTEGRATION === "1";
 const hasRustAnalyzer = shouldRunRustAnalyzerIntegration && await commandExists("rust-analyzer");
@@ -34,13 +33,13 @@ describe.skipIf(!hasRustAnalyzer)("Rust language server integration", () => {
     });
 
     try {
-      await expect(provider.diagnostics(filePathToUri(filePath))).resolves.toMatchObject({
+      await expect(provider.diagnostics(filePath)).resolves.toMatchObject({
         status: "ok",
         items: [expect.objectContaining({ severity: "error" })]
       });
 
       await fs.writeFile(filePath, "fn main() {\n    let value: i32 = 1;\n    let _ = value;\n}\n", "utf8");
-      await expect(provider.diagnostics(filePathToUri(filePath))).resolves.toMatchObject({
+      await expect(provider.diagnostics(filePath)).resolves.toMatchObject({
         status: "ok",
         items: []
       });

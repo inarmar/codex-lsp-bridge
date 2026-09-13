@@ -27,6 +27,7 @@ export class LspProviderRegistry {
     const config = createLanguageServerConfig(language, this.registry.descriptor(language), this.rootPath);
     const provider = new LspSemanticProvider({
       rootPath: this.rootPath,
+      languageServerWorkspace: config.languageServerWorkspace,
       languageId: config.languageId,
       server: config.server,
       workspaceSeedFiles: config.workspaceSeedFiles,
@@ -40,6 +41,11 @@ export class LspProviderRegistry {
 
   forFile(filePath: string): SemanticProvider {
     return this.forLanguage(this.registry.detectByExtension(filePath));
+  }
+
+  /** Number of lazily created providers (spawned language servers not included). */
+  get activeProviderCount(): number {
+    return this.providers.size;
   }
 
   async dispose(): Promise<void> {

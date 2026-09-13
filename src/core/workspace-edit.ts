@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { WorkspacePathError, resolveWorkspaceTarget } from "./paths.js";
 import { filePathToUri, uriToFilePath } from "../utils/uri.js";
 
 /**
@@ -356,20 +357,13 @@ async function resolveEditPath(uri: unknown, rootRealPath: string): Promise<stri
   if (typeof uri !== "string" || uri.length === 0) {
     throw new Error("Workspace edit URI must be a non-empty string");
   }
-  const filePath = path.resolve(uriToFilePath(uri));
   try {
-    const realFilePath = await fs.realpath(filePath);
-    if (!isInsideRoot(realFilePath, rootRealPath)) {
-      throw new Error(`Workspace edit target is outside workspace root: ${filePath}`);
-    }
-    return realFilePath;
+    return await resolveWorkspaceTarget(rootRealPath, uriToFilePath(uri));
   } catch (error) {
-    if (error instanceof Error && error.message.includes("outside workspace root")) throw error;
-    // The file may not exist yet (CreateFile / RenameFile target): check lexically.
-    if (!isInsideRoot(filePath, rootRealPath)) {
-      throw new Error(`Workspace edit target is outside workspace root: ${filePath}`);
+    if (error instanceof WorkspacePathError) {
+      throw new Error(`Workspace edit target is outside workspace root: ${uriToFilePath(uri)}`);
     }
-    return filePath;
+    throw error;
   }
 }
 
@@ -386,10 +380,6 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function isInsideRoot(filePath: string, rootPath: string): boolean {
-  return filePath === rootPath || filePath.startsWith(`${rootPath}${path.sep}`);
 }
 
 function readString(record: Record<string, unknown>, key: string): string {

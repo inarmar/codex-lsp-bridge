@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { CommandService, WorkspaceCommandService } from "../src/core/command-service.js";
-import type { CodeActionResult, DiagnosticReport, FileRenameSummary, HoverInfo, Location, RenameSummary, SemanticProvider, SymbolMatch } from "../src/core/types.js";
-import { filePathToUri } from "../src/utils/uri.js";
+import type { ApplyCodeActionRequest, CodeActionListReport, DiagnosticReport, FileRenameSummary, HoverInfo, KnownDiagnosticsSnapshot, Location, RenameSummary, SemanticProvider, SymbolMatch } from "../src/core/types.js";
 
 class FakeProvider implements SemanticProvider {
   constructor(private readonly label = "src") {}
 
-  diagnostics(): Promise<DiagnosticReport> {
+  diagnostics(file: string): Promise<DiagnosticReport> {
     return Promise.resolve({
       status: "ok",
       timedOut: false,
@@ -22,6 +24,10 @@ class FakeProvider implements SemanticProvider {
         }
       ]
     });
+  }
+
+  knownDiagnosticsSnapshot(filePath: string): Promise<KnownDiagnosticsSnapshot> {
+    return Promise.resolve({ filePath, diagnostics: [] });
   }
 
   definition(symbol: string): Promise<Location> {
@@ -63,8 +69,24 @@ class FakeProvider implements SemanticProvider {
     });
   }
 
-  codeActions(): Promise<CodeActionResult> {
-    return Promise.resolve({ actions: [] });
+  listCodeActions(file: string, _range: { start: { line: number; character: number }; end: { line: number; character: number } }, _only?: string[]): Promise<CodeActionListReport> {
+    return Promise.resolve({
+      candidates: [
+        { title: "Fix", raw: { title: "Fix", command: { title: "Fix", command: "fix" } }, hasEdit: false, hasCommand: true }
+      ]
+    });
+  }
+
+  applyCodeAction(request: ApplyCodeActionRequest): Promise<{ title: string; changedFiles: string[]; createdFiles: string[]; renamedFiles: { from: string; to: string }[]; deletedFiles: string[]; editCount: number; commandExecuted: boolean }> {
+    return Promise.resolve({
+      title: "Fix",
+      changedFiles: [request.file],
+      createdFiles: [],
+      renamedFiles: [],
+      deletedFiles: [],
+      editCount: 0,
+      commandExecuted: true
+    });
   }
 
   willRenameFiles(oldPath: string, newPath: string, renamed = false): Promise<FileRenameSummary> {
@@ -72,7 +94,7 @@ class FakeProvider implements SemanticProvider {
   }
 
   notifyFilesRenamed(oldPath: string, newPath: string): Promise<FileRenameSummary> {
-    return this.willRenameFiles(oldPath, newPath, true);
+    return this.willRenameFiles(oldPath, newPath).then((result) => ({ ...result, renamed: true, renamedFiles: [{ from: oldPath, to: newPath }] }));
   }
 
   dispose(): Promise<void> {
@@ -99,7 +121,7 @@ describe("CommandService", () => {
   it("returns compressed diagnostic summaries", async () => {
     const service = new CommandService(new FakeProvider());
 
-    await expect(service.diagnostics()).resolves.toMatchObject({
+    await expect(service.diagnostics("src/editor/store.ts")).resolves.toMatchObject({
       total: 1,
       summary: ["1. ERROR src/editor/store.ts:182:7 Property 'id' does not exist on type"]
     });
@@ -134,6 +156,39 @@ describe("CommandService", () => {
       contents: "position hover"
     });
   });
+
+  it("lists code actions by stable handle and applies them", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-cmd-"));
+    const filePath = path.join(dir, "editor.ts");
+    await fs.writeFile(filePath, "export const x = 1;\n", "utf8");
+    const service = new CommandService(new FakeProvider());
+
+    const listed = await service.listCodeActions(
+      filePath,
+      { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } },
+      ["quickfix"]
+    );
+    expect(listed).toEqual([
+      expect.objectContaining({ title: "Fix", id: expect.stringMatching(/^ca-\d+$/) })
+    ]);
+    await expect(service.applyCodeAction(listed[0].id)).resolves.toMatchObject({
+      title: "Fix",
+      commandExecuted: true
+    });
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("rejects reusing an applied handle", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-cmd-"));
+    const filePath = path.join(dir, "editor.ts");
+    await fs.writeFile(filePath, "export const x = 1;\n", "utf8");
+    const service = new CommandService(new FakeProvider());
+
+    const listed = await service.listCodeActions(filePath, { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } });
+    await service.applyCodeAction(listed[0].id);
+    await expect(service.applyCodeAction(listed[0].id)).rejects.toThrow("unknown or expired");
+    await fs.rm(dir, { recursive: true, force: true });
+  });
 });
 
 describe("WorkspaceCommandService", () => {
@@ -141,7 +196,7 @@ describe("WorkspaceCommandService", () => {
     const registry = new FakeRegistry();
     const service = new WorkspaceCommandService(registry, "typescript");
 
-    await expect(service.diagnostics(filePathToUri("cmd/server/main.go"))).resolves.toMatchObject({
+    await expect(service.diagnostics("cmd/server/main.go")).resolves.toMatchObject({
       items: [expect.objectContaining({ file: "file/editor/store.ts" })]
     });
     await expect(service.definitionAt({ file: "cmd/server/main.go", line: 1, character: 1 })).resolves.toMatchObject({
@@ -163,5 +218,28 @@ describe("WorkspaceCommandService", () => {
     await expect(service.symbols("Editor")).resolves.toMatchObject([{ name: "Editor" }]);
     await expect(service.hover("Editor")).resolves.toMatchObject({ contents: "type Editor = string" });
     expect(registry.files).toEqual([]);
+  });
+
+  it("honors an explicit language override for symbol-only operations", async () => {
+    const registry = new FakeRegistry();
+    const service = new WorkspaceCommandService(registry, "typescript");
+
+    await expect(service.definition("Editor", "rust")).resolves.toMatchObject({ file: "typescript/Editor.ts" });
+    await expect(service.symbols("Editor", "go")).resolves.toMatchObject([{ name: "Editor" }]);
+  });
+
+  it("keeps handles stable across list and apply", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-cmd-"));
+    const filePath = path.join(dir, "main.go");
+    await fs.writeFile(filePath, "package main\n", "utf8");
+    const registry = new FakeRegistry();
+    const service = new WorkspaceCommandService(registry, "typescript");
+
+    const listed = await service.listCodeActions(
+      filePath,
+      { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } }
+    );
+    await expect(service.applyCodeAction(listed[0].id)).resolves.toMatchObject({ title: "Fix" });
+    await fs.rm(dir, { recursive: true, force: true });
   });
 });

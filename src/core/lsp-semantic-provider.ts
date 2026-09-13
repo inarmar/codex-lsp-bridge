@@ -2,7 +2,26 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { LspClient, ServerProcessConfig } from "./json-rpc-lsp-bridge.js";
 import { lspSeverityToText } from "./diagnostics.js";
-import type { CodeActionItem, CodeActionResult, Diagnostic, DiagnosticOptions, DiagnosticReport, DocumentPosition, FileRenameSummary, HoverInfo, Location, Position, Range, RenameSummary, SemanticProvider, SymbolMatch } from "./types.js";
+import type {
+  ApplyCodeActionRequest,
+  CodeActionApplied,
+  CodeActionCandidate,
+  CodeActionListReport,
+  Diagnostic,
+  DiagnosticOptions,
+  DiagnosticReport,
+  DocumentPosition,
+  FileRenameSummary,
+  HoverInfo,
+  KnownDiagnosticsSnapshot,
+  Location,
+  Position,
+  Range,
+  RawLspDiagnostic,
+  RenameSummary,
+  SemanticProvider,
+  SymbolMatch
+} from "./types.js";
 import {
   applyWorkspaceEdit as applyEdit,
   normalizeWorkspaceEdit,
@@ -10,6 +29,7 @@ import {
   type NormalizedWorkspaceEdit,
   type WorkspaceEditResult
 } from "./workspace-edit.js";
+import { isPathInsideRoot, resolveWorkspaceTarget } from "./paths.js";
 import { filePathToUri, uriToFilePath } from "../utils/uri.js";
 
 interface LspDiagnostic {
@@ -59,7 +79,13 @@ interface LspCodeAction {
 const defaultDiagnosticsTimeoutMs = 15000;
 
 export interface LspSemanticProviderOptions {
+  /** Workspace Root: the containment boundary. */
   rootPath: string;
+  /**
+   * Language Server Workspace: server cwd / LSP root / seed search root.
+   * Defaults to rootPath.
+   */
+  languageServerWorkspace?: string;
   languageId: string;
   server: ServerProcessConfig;
   clientFactory: (config: ServerProcessConfig) => LspClient;
@@ -71,7 +97,10 @@ export interface LspSemanticProviderOptions {
 export class LspSemanticProvider implements SemanticProvider {
   private initialized = false;
   private workspaceDocumentOpened = false;
+  /** Domain projection of known diagnostics, keyed by canonical document URI. */
   private diagnosticsByUri = new Map<string, Diagnostic[]>();
+  /** Raw protocol-level known diagnostics with full ranges, keyed by canonical URI. */
+  private rawDiagnosticsByUri = new Map<string, RawLspDiagnostic[]>();
   private diagnosticsRevisionByUri = new Map<string, number>();
   private openedDocumentsByUri = new Map<string, { text: string; version: number }>();
   private diagnosticsWaitersByUri = new Map<
@@ -104,7 +133,7 @@ export class LspSemanticProvider implements SemanticProvider {
     });
   }
 
-  async diagnostics(uri?: string, options: DiagnosticOptions = {}): Promise<DiagnosticReport> {
+  async diagnostics(file: string, options: DiagnosticOptions = {}): Promise<DiagnosticReport> {
     const initialized = await this.ensureInitializedForDiagnostics();
     if (!initialized.ok) {
       return {
@@ -116,30 +145,37 @@ export class LspSemanticProvider implements SemanticProvider {
       };
     }
 
-    if (uri) {
-      const document = await this.resolveDocument(uri);
-      const currentRevision = this.diagnosticsRevisionByUri.get(document.uri) ?? 0;
-      const openedDocument = await this.openOrUpdateDocument(document.uri);
-      let timedOut = false;
-      if (openedDocument.changed || !this.diagnosticsByUri.has(document.uri)) {
-        timedOut = !(await this.waitForDiagnostics(document.uri, currentRevision + 1, options.timeoutMs));
-      }
-      const sourceRevision = this.diagnosticsRevisionByUri.get(document.uri);
-      return {
-        status: timedOut ? "timed_out" : "ok",
-        timedOut,
-        stale: timedOut && sourceRevision !== undefined && sourceRevision <= currentRevision,
-        sourceRevision,
-        items: [...(this.diagnosticsByUri.get(document.uri) ?? [])]
-      };
+    const document = await this.resolveDocument(filePathToUri(file));
+    const currentRevision = this.diagnosticsRevisionByUri.get(document.uri) ?? 0;
+    const openedDocument = await this.openOrUpdateDocument(document.uri);
+    let timedOut = false;
+    if (openedDocument.changed || !this.diagnosticsByUri.has(document.uri)) {
+      timedOut = !(await this.waitForDiagnostics(document.uri, currentRevision + 1, options.timeoutMs));
     }
-
+    const sourceRevision = this.diagnosticsRevisionByUri.get(document.uri);
     return {
-      status: "ok",
-      timedOut: false,
-      stale: false,
-      items: [...this.diagnosticsByUri.values()].flat()
+      status: timedOut ? "timed_out" : "ok",
+      timedOut,
+      stale: timedOut && sourceRevision !== undefined && sourceRevision <= currentRevision,
+      sourceRevision,
+      items: [...(this.diagnosticsByUri.get(document.uri) ?? [])]
     };
+  }
+
+  /**
+   * Internal Known Diagnostics capability: raw protocol-level diagnostics for
+   * one file as currently known, without re-contacting the server. Not part of
+   * the public CLI/MCP contract; cannot mean "workspace clean".
+   */
+  async knownDiagnosticsSnapshot(filePath: string): Promise<KnownDiagnosticsSnapshot> {
+    const rootRealPath = await this.rootRealPathPromise;
+    const inputPath = path.resolve(filePath);
+    const realFilePath = await fs.realpath(inputPath).catch(() => undefined);
+    if (!realFilePath || !isPathInsideRoot(realFilePath, rootRealPath)) {
+      return { filePath: inputPath, diagnostics: [] };
+    }
+    const uri = filePathToUri(realFilePath);
+    return { filePath: realFilePath, diagnostics: [...(this.rawDiagnosticsByUri.get(uri) ?? [])] };
   }
 
   private async ensureInitializedForDiagnostics(): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -259,8 +295,10 @@ export class LspSemanticProvider implements SemanticProvider {
     };
   }
 
-  async codeActions(file: string, range: Range, only?: string[], apply?: number): Promise<CodeActionResult> {
+  /** Lists code actions at a range; the Bridge builds the full LSP context. */
+  async listCodeActions(file: string, range: Range, only?: string[]): Promise<CodeActionListReport> {
     const document = await this.openOrUpdateDocument(filePathToUri(file));
+    const diagnostics = this.overlappingDiagnostics(document.uri, range);
     const result = await this.client.request<unknown>("textDocument/codeAction", {
       textDocument: { uri: document.uri },
       range: {
@@ -268,25 +306,40 @@ export class LspSemanticProvider implements SemanticProvider {
         end: toLspPosition(range.end)
       },
       context: {
-        diagnostics: [],
+        diagnostics,
         ...(only && only.length > 0 ? { only } : {})
       }
     });
     const rawActions = Array.isArray(result) ? result : [];
-    const actions = rawActions.map((raw, index) => summarizeCodeAction(raw, index));
-    if (apply === undefined) return { actions };
-    if (!Number.isInteger(apply) || apply < 0 || apply >= rawActions.length) {
-      throw new Error(`Code action index ${apply} is out of range`);
-    }
+    return {
+      candidates: rawActions.map((raw) => {
+        const title = codeActionTitle(raw);
+        const kind = isCodeAction(raw) ? raw.kind : undefined;
+        const preferred = isCodeAction(raw) && raw.isPreferred !== undefined ? raw.isPreferred : undefined;
+        return {
+          title,
+          ...(kind !== undefined ? { kind } : {}),
+          ...(preferred !== undefined ? { isPreferred: preferred } : {}),
+          raw,
+          hasEdit: isCodeAction(raw) && raw.edit !== undefined,
+          hasCommand: isCodeAction(raw) ? raw.command !== undefined : isLspCommand(raw)
+        };
+      })
+    };
+  }
 
-    let action = rawActions[apply];
+  /** Applies a previously listed action (raw payload retained by the handle cache). */
+  async applyCodeAction(request: ApplyCodeActionRequest): Promise<CodeActionApplied> {
+    const document = await this.openOrUpdateDocument(filePathToUri(request.file));
+    let action = request.raw;
     if (isCodeAction(action) && action.data !== undefined && action.edit === undefined && action.command === undefined) {
       action = await this.client.request<unknown>("codeAction/resolve", action);
     }
     const selected = isCodeAction(action) ? action : undefined;
     const command = isLspCommand(action) ? action : selected?.command;
+    const title = codeActionTitle(action);
     if (!selected && !command) {
-      throw new Error(`Code action ${apply} is not executable`);
+      throw new Error(`Code action is not executable: ${title}`);
     }
     let editResult: WorkspaceEditResult = {
       applied: true,
@@ -308,23 +361,20 @@ export class LspSemanticProvider implements SemanticProvider {
     }
 
     return {
-      actions,
-      applied: {
-        index: apply,
-        title: codeActionTitle(action, apply),
-        changedFiles: editResult.changedFiles,
-        createdFiles: editResult.createdFiles,
-        renamedFiles: editResult.renamedFiles,
-        deletedFiles: editResult.deletedFiles,
-        editCount: editResult.textEditCount,
-        commandExecuted: command !== undefined
-      }
+      title,
+      changedFiles: editResult.changedFiles,
+      createdFiles: editResult.createdFiles,
+      renamedFiles: editResult.renamedFiles,
+      deletedFiles: editResult.deletedFiles,
+      editCount: editResult.textEditCount,
+      commandExecuted: command !== undefined
     };
   }
 
   async willRenameFiles(oldPath: string, newPath: string): Promise<FileRenameSummary> {
     const oldDocument = await this.resolveDocument(filePathToUri(oldPath));
-    const targetPath = await this.resolveWorkspaceTarget(newPath);
+    const rootRealPath = await this.rootRealPathPromise;
+    const targetPath = await resolveWorkspaceTarget(rootRealPath, newPath);
     const rawEdit = await this.client.request<unknown | null>("workspace/willRenameFiles", {
       files: [{ oldUri: oldDocument.uri, newUri: filePathToUri(targetPath) }]
     });
@@ -344,8 +394,9 @@ export class LspSemanticProvider implements SemanticProvider {
 
   async notifyFilesRenamed(oldPath: string, newPath: string): Promise<FileRenameSummary> {
     await this.ensureInitialized();
-    const oldTarget = await this.resolveWorkspaceTarget(oldPath);
-    const newTarget = await this.resolveWorkspaceTarget(newPath);
+    const rootRealPath = await this.rootRealPathPromise;
+    const oldTarget = await resolveWorkspaceTarget(rootRealPath, oldPath);
+    const newTarget = await resolveWorkspaceTarget(rootRealPath, newPath);
     const oldUri = filePathToUri(oldTarget);
     const newUri = filePathToUri(newTarget);
 
@@ -506,15 +557,16 @@ export class LspSemanticProvider implements SemanticProvider {
 
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
+    const languageServerWorkspace = await this.resolveLanguageServerWorkspace();
 
     await this.client.request("initialize", {
       processId: process.pid,
-      rootPath: this.options.rootPath,
-      rootUri: filePathToUri(this.options.rootPath),
+      rootPath: languageServerWorkspace,
+      rootUri: filePathToUri(languageServerWorkspace),
       workspaceFolders: [
         {
-          uri: filePathToUri(this.options.rootPath),
-          name: path.basename(this.options.rootPath)
+          uri: filePathToUri(languageServerWorkspace),
+          name: path.basename(languageServerWorkspace)
         }
       ],
       capabilities: {
@@ -528,8 +580,14 @@ export class LspSemanticProvider implements SemanticProvider {
           hover: {},
           rename: { prepareSupport: true },
           codeAction: {
+            codeActionLiteralSupport: {
+              codeActionKind: {
+                valueSet: ["quickfix", "refactor", "source", "quickfix.*", "refactor.*", "source.*"]
+              }
+            },
             dataSupport: true,
-            resolveSupport: { properties: ["edit"] }
+            resolveSupport: { properties: ["edit"] },
+            isPreferredSupport: true
           }
         },
         workspace: {
@@ -588,29 +646,31 @@ export class LspSemanticProvider implements SemanticProvider {
   private async ensureWorkspaceDocumentOpened(): Promise<void> {
     if (this.workspaceDocumentOpened) return;
 
-    const seedFile = await this.findWorkspaceSeedFile();
+    const languageServerWorkspace = await this.resolveLanguageServerWorkspace();
+    const seedFile = await this.findWorkspaceSeedFile(languageServerWorkspace);
     if (!seedFile) {
-      throw new Error(`No ${this.options.languageId} workspace seed file found under ${this.options.rootPath}`);
+      throw new Error(`No ${this.options.languageId} workspace seed file found under ${languageServerWorkspace}`);
     }
 
     await this.openOrUpdateDocument(filePathToUri(seedFile));
     this.workspaceDocumentOpened = true;
   }
 
-  private async findWorkspaceSeedFile(): Promise<string | undefined> {
+  private async findWorkspaceSeedFile(languageServerWorkspace: string): Promise<string | undefined> {
     for (const relativePath of this.options.workspaceSeedFiles ?? []) {
-      const filePath = path.join(this.options.rootPath, relativePath);
+      const filePath = path.join(languageServerWorkspace, relativePath);
       if (await fileExists(filePath)) return filePath;
     }
 
-    return findFirstSourceFile(this.options.rootPath, this.options.workspaceSeedExtensions ?? []);
+    return findFirstSourceFile(languageServerWorkspace, this.options.workspaceSeedExtensions ?? []);
   }
 
   private async resolveSingleSymbol(symbol: string): Promise<SymbolMatch> {
     const matches = (await this.symbols(symbol)).filter((match) => match.name === symbol);
     if (matches.length === 0) throw new Error(`Symbol not found: ${symbol}`);
     if (matches.length > 1) {
-      const locations = matches.map((match) => `${path.relative(this.options.rootPath, match.file)}:${match.line}`).join(", ");
+      const rootRealPath = await this.rootRealPathPromise;
+      const locations = matches.map((match) => `${path.relative(rootRealPath, match.file)}:${match.line}`).join(", ");
       throw new Error(`Symbol is ambiguous: ${symbol} (${locations})`);
     }
     return matches[0];
@@ -621,6 +681,16 @@ export class LspSemanticProvider implements SemanticProvider {
 
     const revision = (this.diagnosticsRevisionByUri.get(params.uri) ?? 0) + 1;
     this.diagnosticsRevisionByUri.set(params.uri, revision);
+    this.rawDiagnosticsByUri.set(
+      params.uri,
+      params.diagnostics.map((diagnostic) => ({
+        range: diagnostic.range,
+        severity: diagnostic.severity,
+        code: diagnostic.code,
+        source: diagnostic.source,
+        message: diagnostic.message
+      }))
+    );
     this.diagnosticsByUri.set(
       params.uri,
       params.diagnostics.map((diagnostic) => ({
@@ -634,6 +704,14 @@ export class LspSemanticProvider implements SemanticProvider {
       }))
     );
     this.resolveDiagnosticsWaiters(params.uri, revision);
+  }
+
+  /** Raw diagnostics overlapping the request range, as LSP context items. */
+  private overlappingDiagnostics(uri: string, range: Range): LspDiagnostic[] {
+    const raw = this.rawDiagnosticsByUri.get(uri) ?? [];
+    const start = toLspPosition(range.start);
+    const end = toLspPosition(range.end);
+    return raw.filter((diagnostic) => rangesOverlap(diagnostic.range, { start, end }));
   }
 
   private waitForDiagnostics(uri: string, minRevision: number, timeoutMs = this.options.diagnosticsTimeoutMs ?? defaultDiagnosticsTimeoutMs): Promise<boolean> {
@@ -660,26 +738,14 @@ export class LspSemanticProvider implements SemanticProvider {
     });
   }
 
-  private async resolveWorkspaceTarget(filePath: string): Promise<string> {
-    const targetPath = path.resolve(filePath);
-    const rootRealPath = await this.rootRealPathPromise;
-    if (!isInsideRoot(targetPath, rootRealPath)) {
-      throw new Error(`File is outside workspace root: ${filePath}`);
+  private async resolveLanguageServerWorkspace(): Promise<string> {
+    if (this.options.languageServerWorkspace) {
+      const realPath = await fs.realpath(this.options.languageServerWorkspace).catch(() => undefined);
+      if (realPath) return realPath;
     }
-
-    const parentPath = path.dirname(targetPath);
-    const parentRealPath = await fs.realpath(parentPath).catch(() => undefined);
-    if (!parentRealPath || !isInsideRoot(parentRealPath, rootRealPath)) {
-      throw new Error(`File is outside workspace root: ${filePath}`);
-    }
-    if (await fileExists(targetPath)) {
-      const realTargetPath = await fs.realpath(targetPath);
-      if (!isInsideRoot(realTargetPath, rootRealPath)) {
-        throw new Error(`File is outside workspace root: ${filePath}`);
-      }
-    }
-    return targetPath;
+    return this.rootRealPathPromise;
   }
+
   private async resolveDocument(uri: string): Promise<{ uri: string; filePath: string }> {
     const inputPath = path.resolve(uriToFilePath(uri));
     let realFilePath: string;
@@ -697,7 +763,7 @@ export class LspSemanticProvider implements SemanticProvider {
     }
 
     const realRootPath = await this.rootRealPathPromise;
-    if (!isInsideRoot(realFilePath, realRootPath)) {
+    if (!isPathInsideRoot(realFilePath, realRootPath)) {
       throw new Error(`File is outside workspace root: ${inputPath}`);
     }
 
@@ -743,22 +809,6 @@ function emptyWorkspaceEditResult(): WorkspaceEditResult {
     textEditCount: 0
   };
 }
-function summarizeCodeAction(raw: unknown, index: number): CodeActionItem {
-  if (isCodeAction(raw)) {
-    return {
-      index,
-      title: raw.title,
-      ...(raw.kind ? { kind: raw.kind } : {}),
-      ...(raw.isPreferred !== undefined ? { isPreferred: raw.isPreferred } : {}),
-      hasEdit: raw.edit !== undefined,
-      hasCommand: raw.command !== undefined
-    };
-  }
-  if (isLspCommand(raw)) {
-    return { index, title: raw.title ?? raw.command, hasEdit: false, hasCommand: true };
-  }
-  return { index, title: `Code action ${index}`, hasEdit: false, hasCommand: false };
-}
 
 function isCodeAction(value: unknown): value is LspCodeAction {
   if (!value || typeof value !== "object") return false;
@@ -772,10 +822,10 @@ function isLspCommand(value: unknown): value is LspCommand {
   return typeof candidate.command === "string";
 }
 
-function codeActionTitle(value: unknown, index: number): string {
+function codeActionTitle(value: unknown): string {
   if (isCodeAction(value)) return value.title;
   if (isLspCommand(value)) return value.title ?? value.command;
-  return `Code action ${index}`;
+  return "Code action";
 }
 function normalizeHoverContents(contents: LspHover["contents"]): string {
   if (typeof contents === "string") return contents;
@@ -809,6 +859,13 @@ function rangeContains(range: { start: Position; end: Position }, position: Posi
   return true;
 }
 
+function rangesOverlap(left: { start: Position; end: Position }, right: { start: Position; end: Position }): boolean {
+  if (left.end.line < right.start.line || right.end.line < left.start.line) return false;
+  if (left.end.line === right.start.line && left.end.character < right.start.character) return false;
+  if (right.end.line === left.start.line && right.end.character < left.start.character) return false;
+  return true;
+}
+
 function formatPosition(position: DocumentPosition): string {
   return `${position.file}:${position.line}:${position.character}`;
 }
@@ -820,10 +877,6 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function isInsideRoot(filePath: string, rootPath: string): boolean {
-  return filePath === rootPath || filePath.startsWith(`${rootPath}${path.sep}`);
 }
 
 function symbolKindName(kind: number): string {

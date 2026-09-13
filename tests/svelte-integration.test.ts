@@ -6,7 +6,6 @@ import { createLanguageServerConfig } from "../src/adapters/language-registry.js
 import { defaultLanguageServers } from "../src/adapters/default-language-servers.js";
 import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-bridge.js";
 import { LspSemanticProvider } from "../src/core/lsp-semantic-provider.js";
-import { filePathToUri } from "../src/utils/uri.js";
 
 const shouldRunSvelteIntegration = process.env.CODEX_LSP_RUN_SVELTE_INTEGRATION === "1";
 const hasSvelteServer = shouldRunSvelteIntegration && (await commandExists("svelteserver"));
@@ -39,7 +38,7 @@ describe.skipIf(!hasSvelteServer)("Svelte language server integration", () => {
     });
 
     try {
-      const report = await provider.diagnostics(filePathToUri(filePath));
+      const report = await provider.diagnostics(filePath);
       expect(report.status).toBe("ok");
     } finally {
       await provider.dispose();

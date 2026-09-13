@@ -17,6 +17,6 @@ Do not open a public issue for vulnerabilities that could expose user workspaces
 - It starts configured local language server processes.
 - It reads files from the active workspace to synchronize documents with the language server.
 - It does not intentionally execute arbitrary project code.
-- The installer writes Codex configuration only when the user explicitly runs `codex-lsp-bridge-install`.
+- The npm package ships no installer: Codex configuration is modified only by manual registration.
 
 Language servers are external executables. Review and install them from trusted sources.

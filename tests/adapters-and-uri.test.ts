@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createLanguageServerConfig, LanguageRegistry } from "../src/adapters/language-registry.js";
+import { createLanguageServerConfig, LanguageRegistry, resolveLanguageServerWorkspace } from "../src/adapters/language-registry.js";
 import { defaultLanguageServers } from "../src/adapters/default-language-servers.js";
 import { filePathToUri, uriToFilePath } from "../src/utils/uri.js";
 
@@ -16,10 +16,61 @@ describe("language registry", () => {
       installHint: "npm install -g typescript-language-server typescript",
       supportLevel: "primary",
       workspaceSeedFiles: expect.arrayContaining(["src/proxy.ts"]),
+      languageServerWorkspace: path.resolve("."),
       server: { command: "typescript-language-server", args: ["--stdio"] }
     });
     expect(path.isAbsolute(config.server.cwd)).toBe(true);
+    expect(config.server.cwd).toBe(config.languageServerWorkspace);
   });
+
+  it("resolves a nested language server workspace and keeps the root as containment boundary", () => {
+    const rootPath = path.resolve("fake-repo");
+    const custom = LanguageRegistry.fromLanguageServers({
+      typescript: { ...defaultLanguageServers.typescript, workspacePath: "frontend" }
+    });
+    const config = createLanguageServerConfig("typescript", custom.descriptor("typescript"), rootPath);
+
+    expect(config.languageServerWorkspace).toBe(path.join(rootPath, "frontend"));
+    expect(config.server.cwd).toBe(config.languageServerWorkspace);
+    expect(config.workspaceRootPath).toBe(rootPath);
+  });
+
+  it("rejects language server workspaces outside the workspace root", () => {
+    const rootPath = path.resolve("fake-repo");
+
+    expect(() =>
+      LanguageRegistry.fromLanguageServers({
+        rust: { ...defaultLanguageServers.rust, workspacePath: "../outside" }
+      })
+    ).toThrow("field 'workspacePath' must be a relative path inside the workspace root");
+
+    expect(() => resolveLanguageServerWorkspace(rootPath, "up/../../escape")).toThrow(
+      "workspacePath must be a relative path"
+    );
+  });
+
+  it("rejects absolute and escaping workspaceSeedFiles at config validation", () => {
+    expect(() =>
+      LanguageRegistry.fromLanguageServers({
+        zig: { command: "zls", extensions: [".zig"], workspaceSeedFiles: ["/etc/passwd"] }
+      })
+    ).toThrow("field 'workspaceSeedFiles' must be an array of relative paths");
+
+    expect(() =>
+      LanguageRegistry.fromLanguageServers({
+        zig: { command: "zls", extensions: [".zig"], workspaceSeedFiles: ["../outside/main.zig"] }
+      })
+    ).toThrow("field 'workspaceSeedFiles' must be an array of relative paths");
+  });
+
+  it("rejects absolute workspacePath at config validation", () => {
+    expect(() =>
+      LanguageRegistry.fromLanguageServers({
+        zig: { command: "zls", extensions: [".zig"], workspacePath: "/abs/workspace" }
+      })
+    ).toThrow("field 'workspacePath' must be a relative path");
+  });
+
 
   it("detects supported languages from file extensions", () => {
     expect(registry.detectByExtension("src/app.tsx")).toBe("typescript");

@@ -5,9 +5,17 @@ import { defaultLanguageServers } from "../adapters/default-language-servers.js"
 import { LanguageRegistry, type LanguageServerEntry, type SupportedLanguage } from "../adapters/language-registry.js";
 import { readDiagnosticsTimeoutPolicy, type DiagnosticsTimeoutPolicy } from "./diagnostics-timeout.js";
 
+/** Config defaults for Directory Diagnostics (Timeout Budget, concurrency, cap). */
+export interface DirectoryDiagnosticsConfig {
+  maxFiles: number;
+  timeoutBudgetMs: number;
+  concurrency: number;
+}
+
 export interface BridgeConfig {
   defaultLanguage: SupportedLanguage;
   diagnosticsTimeoutMs: DiagnosticsTimeoutPolicy;
+  directoryDiagnostics: DirectoryDiagnosticsConfig;
   hook: {
     maxFiles: number;
     verbosePending: boolean;
@@ -18,6 +26,11 @@ export interface BridgeConfig {
 const defaults: BridgeConfig = {
   defaultLanguage: "typescript",
   diagnosticsTimeoutMs: 15000,
+  directoryDiagnostics: {
+    maxFiles: 50,
+    timeoutBudgetMs: 15000,
+    concurrency: 2
+  },
   hook: {
     maxFiles: 5,
     verbosePending: false
@@ -50,13 +63,18 @@ function mergeConfig(...configs: Partial<BridgeConfig>[]): BridgeConfig {
     (merged, config) => ({
       defaultLanguage: typeof config.defaultLanguage === "string" ? config.defaultLanguage : merged.defaultLanguage,
       diagnosticsTimeoutMs: readDiagnosticsTimeoutPolicy(config.diagnosticsTimeoutMs, merged.diagnosticsTimeoutMs),
+      directoryDiagnostics: {
+        maxFiles: readPositiveNumber(config.directoryDiagnostics?.maxFiles, merged.directoryDiagnostics.maxFiles),
+        timeoutBudgetMs: readPositiveNumber(config.directoryDiagnostics?.timeoutBudgetMs, merged.directoryDiagnostics.timeoutBudgetMs),
+        concurrency: readPositiveNumber(config.directoryDiagnostics?.concurrency, merged.directoryDiagnostics.concurrency)
+      },
       hook: {
         maxFiles: readPositiveNumber(config.hook?.maxFiles, merged.hook.maxFiles),
         verbosePending: typeof config.hook?.verbosePending === "boolean" ? config.hook.verbosePending : merged.hook.verbosePending
       },
       languageServers: mergeLanguageServers(merged.languageServers, config.languageServers)
     }),
-    { ...defaults, hook: { ...defaults.hook }, languageServers: { ...defaults.languageServers } }
+    { ...defaults, directoryDiagnostics: { ...defaults.directoryDiagnostics }, hook: { ...defaults.hook }, languageServers: { ...defaults.languageServers } }
   );
 }
 

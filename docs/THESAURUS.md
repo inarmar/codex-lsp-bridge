@@ -33,8 +33,14 @@ skill: ubiquitous-language
 
 - **Bridge** `codex-lsp-bridge` kind:concept avoid: `proxy`, `wrapper`
 - **Bridge Config** `BridgeConfig` kind:value
+- **Bridge Operation** `BridgeOperation` kind:value
+- **Bridge Request** `BridgeRequest` kind:value
+- **Bridge Status** `BridgeStatus` kind:service
 - **Command Service** `CommandService` kind:service
 - **Code Action** `CodeAction` kind:command
+- **Code Action Cache** `CodeActionCache` kind:concept
+- **Code Action Handle** `CodeActionHandle` kind:value
+- **Apply Code Action** `applyCodeAction` kind:command
 - **Default Language Servers** `defaultLanguageServers` kind:value
 - **Definition** `Definition` kind:query
 - **Diagnostic** `Diagnostic` kind:value
@@ -42,17 +48,21 @@ skill: ubiquitous-language
 - **Diagnostic Report** `DiagnosticReport` kind:value avoid: `DiagnosticResult`
 - **Diagnostic Status** `DiagnosticStatus` kind:state
 - **Diagnostic Summary** `DiagnosticSummary` kind:value
-- **Diagnostics Timeout Policy** `DiagnosticsTimeoutPolicy` kind:value avoid: `timeoutBudget` (that is Directory Diagnostics)
+- **Diagnostics Timeout Policy** `DiagnosticsTimeoutPolicy` kind:value avoid: `timeoutBudget` (that is Timeout Budget)
 - **Directory Diagnostics** `DirectoryDiagnostics` kind:query avoid: `directoryScan`
-- **Doctor** `Doctor` kind:service avoid: `HealthCheck`
+- **File Diagnostics** `fileDiagnostics` kind:query
 - **Document Position** `DocumentPosition` kind:value
 - **File Rename Sync** `FileRenameSync` kind:process
 - **Hover** `Hover` kind:query
 - **Hover Info** `HoverInfo` kind:value avoid: `HoverResult`
 - **Install Hint** `InstallHint` kind:concept
+- **Known Diagnostics** `KnownDiagnostics` kind:value
+- **Known Diagnostics Delta** `KnownDiagnosticsDelta` kind:value
+- **Known Diagnostics Snapshot** `KnownDiagnosticsSnapshot` kind:value
 - **Language Descriptor** `LanguageDescriptor` kind:value
 - **Language Registry** `LanguageRegistry` kind:service
 - **Language Server** `LanguageServer` kind:concept avoid: `LanguageServerConfig` (that is its config type), `Lsp`
+- **Language Server Workspace** `LanguageServerWorkspace` kind:concept
 - **LSP Client** `LspClient` kind:service
 - **LSP Provider Registry** `LspProviderRegistry` kind:service
 - **Location** `Location` kind:value
@@ -72,7 +82,10 @@ skill: ubiquitous-language
 - **Timeout Budget** `TimeoutBudget` kind:value avoid: `timeoutMs` (that is Diagnostics Timeout Policy)
 - **Workspace Command Service** `WorkspaceCommandService` kind:service
 - **Workspace Edit** `WorkspaceEdit` kind:value
+- **Workspace Path Resolver** `resolveWorkspacePath` kind:service avoid: `resolveFileInsideRoot`
 - **Workspace Root** `WorkspaceRoot` kind:concept avoid: `projectRoot`
+- **Workspace Root Resolution** `resolveWorkspaceRoot` kind:service
+- **Workspace Runtime** `WorkspaceRuntime` kind:service avoid: `BridgeRuntime`
 - **Workspace Seed Files** `WorkspaceSeedFiles` kind:concept
 
 ## Terms
@@ -81,7 +94,7 @@ skill: ubiquitous-language
 
 - **Definition**: The semantic layer between Codex CLI and local language servers; the product itself (`codex-lsp-bridge`, npm package, MCP server). Reads are unlimited; edits happen only through language-server-defined, bridge-validated Workspace Edits.
 - **NOT**: A general-purpose LSP proxy or an editor plugin; it never applies an edit the language server did not return.
-- **Related**: Semantic Provider, Workspace Edit, Post-Tool Diagnostics, Doctor
+- **Related**: Semantic Provider, Workspace Edit, Post-Tool Diagnostics, Bridge Status
 
 ### Bridge Config
 
@@ -97,9 +110,9 @@ skill: ubiquitous-language
 
 ### Code Action
 
-- **Definition**: Command listing and applying language-server code actions (quickfixes, refactors, source actions) for a file range; exposed as the `lsp_code_actions` MCP tool. Two modes: list (returns indexed actions) and apply by index. Command-only actions are executed through an internal `workspace/executeCommand`; the edit itself always flows through the Workspace Edit pipeline.
-- **NOT**: A free-form code generation tool; the bridge applies only what the language server returns. `workspace/executeCommand` is never exposed to the agent as a tool.
-- **Related**: Workspace Edit, Server Request
+- **Definition**: Command listing Language Server code actions (quickfixes, refactors, source actions) for a file range; exposed as the `lsp_code_actions` MCP tool. The Bridge builds the LSP request itself: required cursor position (line/character) plus optional selection (end line/character) forms the range, and overlapping Known Diagnostics are automatically placed into `CodeActionContext.diagnostics`. Returns agent-facing summaries carrying a Code Action Handle; the raw actions are retained in the Code Action Cache. Command-only actions are executed internally via `workspace/executeCommand`; edits always flow through the Workspace Edit pipeline.
+- **NOT**: A free-form code generation tool; applying is a separate Apply Code Action operation; the bridge applies only what the language server returns.
+- **Related**: Code Action Handle, Apply Code Action, Workspace Edit, Known Diagnostics, Server Request
 
 ### Default Language Servers
 
@@ -145,21 +158,97 @@ skill: ubiquitous-language
 
 ### Diagnostics Timeout Policy
 
-- **Definition**: How long file diagnostics wait for fresh results: a fixed number of milliseconds or `"auto"` (derived from workspace hints such as monorepo markers, tsconfig references, and sampled source-file count); surfaces as `timeoutMs` / `diagnosticsTimeoutMs`.
+- **Definition**: How long File Diagnostics wait for fresh results: a fixed number of milliseconds or `"auto"` (derived from workspace hints such as monorepo markers, tsconfig references, and sampled source-file count); surfaces as `timeoutMs` / `diagnosticsTimeoutMs`. Positive integer only.
 - **NOT**: The wall-clock budget of a directory scan (that's Timeout Budget — passing `timeoutBudgetMs` for file diagnostics is rejected).
-- **Related**: Timeout Budget, Directory Diagnostics
+- **Related**: Timeout Budget, File Diagnostics, Directory Diagnostics
 
 ### Directory Diagnostics
 
-- **Definition**: A bounded recursive scan that runs file Diagnostics over a directory's source files with `maxFiles`, `concurrency`, a Timeout Budget, and `truncated` / `budgetTimedOut` markers; invoked via the `dir` argument of `lsp_diagnostics`.
-- **NOT**: A whole-project type-check; results are per-file LSP Diagnostics, not a compiler run.
-- **Related**: Timeout Budget, Source File List Cache, Diagnostic Summary
+- **Definition**: A bounded recursive scan orchestration run by the Workspace Runtime over File Diagnostics: enumerate source files (`maxFiles` limit, Source File List Cache), run file Diagnostics per file with `concurrency`, merge results by Severity, and stop scheduling new work once the Timeout Budget (`timeoutBudgetMs`) is exhausted — already-running requests may still finish, so the budget is a scheduling budget, not a hard wall-clock deadline. Exposed as `lsp_directory_diagnostics` / `directory-diagnostics`.
+- **NOT**: A whole-project type-check; results are per-file LSP Diagnostics, not a compiler run. Not part of file diagnostics (`timeoutMs` for a directory is rejected).
+- **Related**: Timeout Budget, Source File List Cache, Diagnostic Summary, File Diagnostics, Workspace Runtime
 
-### Doctor
+### Apply Code Action
 
-- **Definition**: The environment health-check (`codex-lsp-bridge doctor`, `runDoctor`) that reports per-language server availability, Codex MCP/hook/instructions wiring, build freshness, and the resolved diagnostics timeout.
-- **NOT**: A diagnostic run over source code (that's Directory Diagnostics).
-- **Related**: Language Server, Support Level, Install Hint, Diagnostics Timeout Policy
+- **Definition**: Operation that applies a previously listed Code Action by its stable Code Action Handle: checks handle existence/expiry, re-reads the source document and compares its content fingerprint to the fingerprint captured at list time (changed → reject as stale), re-synchronizes the document with the Language Server, resolves a data-backed action if needed, then applies its WorkspaceEdit through the Workspace Edit pipeline and/or executes its command. Exposed as `lsp_apply_code_action` / `apply-code-action --id`.
+- **NOT**: The list step (that's Code Action); the old `apply` index argument — handles are opaque and bounded by the Code Action Cache.
+- **Related**: Code Action, Code Action Handle, Code Action Cache, Workspace Edit, Staleness
+
+### Bridge Operation
+
+- **Definition**: The canonical, transport-neutral operation union (`BridgeOperation`): `status`, `fileDiagnostics`, `directoryDiagnostics`, `definitionBySymbol`/`definitionAt`, `referencesBySymbol`/`referencesAt`, `symbols`, `hoverBySymbol`/`hoverAt`, `renameAt`, `listCodeActions`, `applyCodeAction`, `willRenameFiles`. Each variant carries typed, validated fields; positions and numeric options are positive integers.
+- **NOT**: A transport message (`tools/call` params or CLI argv are transport syntax) or the request envelope (that's Bridge Request).
+- **Related**: Bridge Request, Operation Decoder
+
+### Bridge Request
+
+- **Definition**: The canonical request envelope `{ root?, operation }` produced by both transport decoders (CLI `parseCliArgs`, MCP `tools/call` handler) and consumed by `executeOperation`. `root` is a workspace selector (optional override for detached worktrees / different workspace), never an argument of a specific operation.
+- **NOT**: Transport-specific syntax; operation arguments live inside `operation`.
+- **Related**: Bridge Operation, Workspace Root, Workspace Runtime
+
+### Bridge Status
+
+- **Definition**: The single health/configuration operation (`status` / `lsp_status` / `collectBridgeStatus`): resolved Bridge Config, per-language server availability and Language Server Workspace, executable resolution, seed-file availability, diagnostics configuration, Codex integration state, build freshness, and already-known runtime state. Status never starts all Language Servers just to answer.
+- **NOT**: A diagnostics run over source code (that's Directory Diagnostics); the CLI `doctor` command, which was retired in favor of `status`.
+- **Related**: Language Server, Support Level, Install Hint, Diagnostics Timeout Policy, Workspace Runtime
+
+### Code Action Cache
+
+- **Definition**: The bounded, runtime-owned store of raw Language Server Code Actions (`CodeActionCache` in `WorkspaceRuntime`): maps an opaque Code Action Handle to the provider instance, canonical source file, content fingerprint captured at list time, and the raw `Command | CodeAction`. Bounded/expiring so the runtime does not accumulate actions indefinitely; a handle is invalidated on apply.
+- **NOT**: The provider's protocol cache or raw diagnostics store.
+- **Related**: Code Action Handle, Apply Code Action, Workspace Runtime
+
+### Code Action Handle
+
+- **Definition**: Opaque identifier (`CodeActionHandle`) of a previously listed Code Action, bound to the Workspace Runtime, provider/language, canonical file, and the document content fingerprint at list time. Lets the agent apply an action by stable id instead of recomputing the list and picking by an unstable array index.
+- **NOT**: An LSP protocol id; the `apply` index of the legacy contract.
+- **Related**: Code Action, Apply Code Action, Code Action Cache
+
+### File Diagnostics
+
+- **Definition**: File-scoped diagnostics operation (`fileDiagnostics` / `lsp_diagnostics`): opens one document, waits up to `timeoutMs` for a fresh `publishDiagnostics` (Source Revision-based), and returns the Diagnostic Summary. `file` is required; `timeoutMs` is an optional positive integer defaulting to the Diagnostics Timeout Policy.
+- **NOT**: Directory Diagnostics (a scan orchestration over many files); the retired no-target mode that listed whatever documents happen to be open.
+- **Related**: Diagnostic Summary, Diagnostics Timeout Policy, Known Diagnostics, Directory Diagnostics
+
+### Known Diagnostics
+
+- **Definition**: Internal protocol-level state: the raw LSP diagnostics (with full ranges) the Bridge has already received via `textDocument/publishDiagnostics`, stored per canonical document by the Semantic Provider. It feeds two consumers: overlapping `CodeActionContext.diagnostics` for Code Actions and a future reactive Post-Tool Diagnostics (Known Diagnostics Snapshot/Delta). It deliberately does not extend the domain `Diagnostic` type.
+- **NOT**: A workspace-wide check — it cannot mean *workspace clean*: only diagnostics the server already published, no re-scan of files. Not part of the public CLI/MCP contract.
+- **Related**: File Diagnostics, Code Action, Post-Tool Diagnostics
+
+### Known Diagnostics Delta
+
+- **Definition**: Difference between two Known Diagnostics Snapshots; the future input for a long-lived-process Post-Tool Diagnostics hook (replacing per-file process spawn). Internal capability only, not a public operation.
+- **Related**: Known Diagnostics Snapshot, Post-Tool Diagnostics
+
+### Known Diagnostics Snapshot
+
+- **Definition**: A point-in-time packet of Known Diagnostics for one file (`knownDiagnosticsSnapshot(filePath)`): the raw 0-based LSP diagnostics with full ranges. Used today for overlapping Code Action context; the basis of a reactive hook delta later.
+- **Related**: Known Diagnostics, Code Action
+
+### Language Server Workspace
+
+- **Definition**: The directory inside the Workspace Root relative to which one Language Server runs (`workspacePath` in the language entry, default `"."`): its process cwd, LSP `rootUri`/`workspaceFolders`, Workspace Seed Files, and primary local-executable search base. Defaults to the Workspace Root but that is a default, not a domain invariant; enables nested frontend workspaces in monorepos. Still falls back to Workspace Root `node_modules/.bin` and PATH for the executable.
+- **NOT**: The Bridge containment boundary (that stays the Workspace Root) or the Workspace Root itself (they may differ).
+- **Related**: Workspace Root, Workspace Runtime, Workspace Seed Files
+
+### Workspace Path Resolver
+
+- **Definition**: Shared resolvers turning transport path input into a canonical absolute path inside the Workspace Root (`resolveWorkspaceFile`, `resolveWorkspaceDirectory`, `resolveWorkspaceTarget`): relative input resolves against the root, absolute input is allowed, existing targets are realpath-checked for symlink escapes, and the target for a not-yet-existing file (create/rename target) is validated by realpath of its nearest existing parent. Containment uses the Workspace Root, not `process.cwd()`.
+- **NOT**: Path syntax parsing inside transports; the Workspace Edit pipeline still applies edits, but uses the same containment semantics.
+- **Related**: Workspace Root, Workspace Edit
+
+### Workspace Root Resolution
+
+- **Definition**: Single shared resolver (`resolveWorkspaceRoot`): resolves relative input against `process.cwd()`, requires an existing directory, canonicalizes via `realpath`, and performs no project-marker checks (no `.git`/`package.json`/`tsconfig.json`/`Cargo.toml` heuristics and no warnings for their absence). An explicit `--root` is valid as an existing directory; accidental overly-broad roots are a separate future policy (e.g. `requireWorkspaceConfig`), not markers.
+- **NOT**: Language Server discovery; default root selection in the composition layer (`--root` or `process.cwd()`).
+- **Related**: Workspace Root, Workspace Runtime
+
+### Workspace Runtime
+
+- **Definition**: The root-scoped owner of live Bridge state (`WorkspaceRuntime`): one per Workspace Root; owns the merged Bridge Config, Language Registry, LSP Provider Registry, Workspace Command Service, Directory Diagnostics resources/cache, and the Code Action Cache, plus their lifecycle (`dispose`). Language Servers are still created lazily by the LSP Provider Registry. Created/reused by the composition layer per resolved Workspace Root.
+- **NOT**: A dependency container for everything (the Workspace Command Service stays a language-routing façade); a separate `BridgeRuntime` beyond the root map is deliberately not introduced.
+- **Related**: Workspace Root, Workspace Command Service, LSP Provider Registry, Directory Diagnostics, Code Action Cache
 
 ### Document Position
 
@@ -188,7 +277,7 @@ skill: ubiquitous-language
 ### Install Hint
 
 - **Definition**: The per-language command string telling the user how to install the Language Server (e.g. `npm install -g typescript-language-server typescript`); defaults to an instruction naming the descriptor's `command`.
-- **Related**: Language Server, Doctor, Support Level, Language Descriptor
+- **Related**: Language Server, Bridge Status, Support Level, Language Descriptor
 
 ### Language Descriptor
 
@@ -228,9 +317,9 @@ skill: ubiquitous-language
 
 ### Post-Tool Diagnostics
 
-- **Definition**: The Codex `PostToolUse` hook (`codex-lsp-bridge post-tool-diagnostics`) that requests Diagnostics for files touched by Write/Edit/apply_patch and feeds the result back to the agent.
-- **NOT**: Any manual diagnostics call (those go through the MCP tools / CLI).
-- **Related**: Diagnostic Summary, Bridge
+- **Definition**: The Codex `PostToolUse` hook (`codex-lsp-bridge post-tool-diagnostics`) that requests File Diagnostics for files touched by Write/Edit/apply_patch and feeds the result back to the agent. A future long-lived-process variant consumes Known Diagnostics Snapshot/Delta instead of spawning per file.
+- **NOT**: Any manual diagnostics call (those go through the MCP tools / CLI); a workspace-wide check.
+- **Related**: Diagnostic Summary, File Diagnostics, Known Diagnostics, Bridge
 
 ### References
 
@@ -256,9 +345,9 @@ skill: ubiquitous-language
 
 ### Source File List Cache
 
-- **Definition**: A short-TTL cache (`directory.sourceFileListCache`, ~5 s) of the file listing used by Directory Diagnostics; a scan-performance hint only — diagnostic contents still come from LSP calls.
+- **Definition**: A short-TTL cache (`directory.sourceFileListCache`, ~5 s) of the file listing used by Directory Diagnostics; owned by the Workspace Runtime. A scan-performance hint only — diagnostic contents still come from LSP calls.
 - **NOT**: A cache of diagnostic results.
-- **Related**: Directory Diagnostics
+- **Related**: Directory Diagnostics, Workspace Runtime
 
 ### Source Revision
 
@@ -302,15 +391,15 @@ skill: ubiquitous-language
 
 ### Timeout Budget
 
-- **Definition**: The wall-clock ceiling of a Directory Diagnostics scan (`timeoutBudgetMs`, default 15000 ms), with `concurrency` bounding parallel file requests; directory-only — rejected on file diagnostics.
+- **Definition**: The wall-clock scheduling ceiling of a Directory Diagnostics scan (`timeoutBudgetMs`, default 15000 ms): after exhaustion, no new file diagnostics are scheduled, but already-running requests may complete — so it is not a hard cancellation deadline. `concurrency` bounds parallel file requests; directory-only — rejected on file diagnostics. Defaults live in `BridgeConfig.directoryDiagnostics`.
 - **NOT**: The per-file wait (that's Diagnostics Timeout Policy, `timeoutMs`).
-- **Related**: Directory Diagnostics, Diagnostics Timeout Policy
+- **Related**: Directory Diagnostics, Diagnostics Timeout Policy, Bridge Config
 
 ### Workspace Command Service
 
-- **Definition**: The language-routing Command Service (`WorkspaceCommandService`): holds a `SemanticProviderRegistry` (LSP Provider Registry) plus a default language from Bridge Config, and picks the provider per call — by the `uri`/`file` argument when present, otherwise the default language. The layer every MCP tool, CLI command, and the post-tool-diagnostics hook ultimately calls.
-- **NOT**: A registry itself (it delegates provider lookup); the CLI entry point composes one per workspace root.
-- **Related**: Command Service, LSP Provider Registry, Bridge Config
+- **Definition**: The language-routing Command Service (`WorkspaceCommandService`): holds a `SemanticProviderRegistry` (LSP Provider Registry), the default language from Bridge Config, and the Code Action Cache; picks the provider per call — by the `file` argument when present, otherwise the default language (or an explicit symbol-operation language override). The layer every MCP tool, CLI command, and the post-tool-diagnostics hook ultimately calls; it owns Code Action list/apply handle orchestration.
+- **NOT**: A registry itself (it delegates provider lookup); created per Workspace Root by the Workspace Runtime.
+- **Related**: Command Service, LSP Provider Registry, Bridge Config, Workspace Runtime, Code Action Cache
 
 ### Workspace Edit
 
@@ -320,14 +409,14 @@ skill: ubiquitous-language
 
 ### Workspace Root
 
-- **Definition**: The containment boundary of every query (`rootPath` / `root`): all file access stays inside it, results outside are not returned; for detached worktrees the caller must pass the real workspace root.
-- **NOT**: The current working directory; must be a real workspace (`.git`, `package.json`, or `tsconfig.json`).
-- **Related**: Semantic Provider, Directory Diagnostics
+- **Definition**: The canonical file boundary of one Bridge workspace (`rootPath` / `root`): an existing directory canonicalized via `realpath`. It defines where the workspace-level Bridge Config lives (`<root>/.codex/lsp-bridge.json`), the containment boundary for file access and Workspace Edits, and the key of one Workspace Runtime. Workspace Root is **not** determined by project markers (.git/package.json/tsconfig.json/Cargo.toml) and is **not** obliged to equal the Language Server Workspace, the LSP `rootUri`, `workspaceFolders`, or `node_modules/.bin` location. The default root is `--root` or `process.cwd()`; per-request `root` remains an optional workspace selector.
+- **NOT**: The current working directory; a Language Server runtime root (that's Language Server Workspace).
+- **Related**: Workspace Root Resolution, Workspace Runtime, Language Server Workspace, Semantic Provider
 
 ### Workspace Seed Files
 
-- **Definition**: The conventional entry files per language (e.g. `src/index.ts`, `src/main.rs`) the provider opens first so a freshly started Language Server indexes the project instead of an empty document.
-- **Related**: Semantic Provider, Language Server
+- **Definition**: The conventional entry files per language (e.g. `src/index.ts`, `src/main.rs`) the provider opens first so a freshly started Language Server indexes the project instead of an empty document. Contractually relative paths inside the Language Server Workspace (absolute paths and `..` escapes are rejected at config validation) — in a monorepo they resolve against the language's workspace, not the Workspace Root.
+- **Related**: Semantic Provider, Language Server, Language Server Workspace
 
 ## Forbidden
 
@@ -344,6 +433,8 @@ skill: ubiquitous-language
 - `LspManager` → `LspProviderRegistry` in: git history, docs predating the rename — renamed 2025, decision recorded in `docs/THESAURUS.md`
 - `LspClientConfig` → `BridgeConfig` in: git history — type renamed; the config FILE also renamed to `lsp-bridge.json`
 - `LanguageServerOverride` → `LanguageDescriptor` in: git history — config entries are partial descriptors merged field by field over the defaults layer; the override type was absorbed by the descriptor format
+- `Doctor` → `BridgeStatus` in: CLI `doctor` command and `runDoctor` — retired in the transport-unification refactor; `status` (`collectBridgeStatus`) is the single health/configuration operation
+- Code Action `apply` index → `CodeActionHandle` in: `lsp_code_actions` apply argument, CLI `--apply` — retired; apply is a separate `applyCodeAction` operation by stable handle
 
 ## Unresolved
 

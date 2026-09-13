@@ -1,6 +1,6 @@
 {
   "name": "codex-lsp-bridge",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Read-only LSP tools + validated semantic edits for Codex CLI.",
   "license": "MIT",
   "author": "codex-lsp-bridge contributors",
@@ -14,9 +14,7 @@
   "homepage": "https://github.com/inarmar/codex-lsp-bridge#readme",
   "type": "module",
   "bin": {
-    "codex-lsp-bridge": "dist/index.js",
-    "codex-lsp-bridge-install": "scripts/install-codex.mjs",
-    "codex-lsp-bridge-uninstall": "scripts/uninstall-codex.mjs"
+    "codex-lsp-bridge": "dist/index.js"
   },
   "files": [
     "dist/index.js",
@@ -25,10 +23,7 @@
     "dist/transport",
     "dist/utils",
     "scripts/codex-lsp-post-tool-use.mjs",
-    "scripts/install-codex.mjs",
-    "scripts/smoke-install.mjs",
     "scripts/smoke-package.mjs",
-    "scripts/uninstall-codex.mjs",
     "scripts/verify-package.mjs",
     ".codex-plugin/plugin.json",
     ".mcp.json",
@@ -49,9 +44,8 @@
     "test:run": "vitest run",
     "type-check": "tsc -p tsconfig.json --noEmit",
     "verify:package": "node scripts/verify-package.mjs",
-    "smoke:install": "node scripts/smoke-install.mjs",
     "smoke:package": "node scripts/smoke-package.mjs",
-    "ci:verify": "npm run type-check && npm test && npm run build && npm run verify:package && npm run smoke:install && npm run smoke:package"
+    "ci:verify": "npm run type-check && npm test && npm run build && npm run verify:package && npm run smoke:package"
   },
   "keywords": [
     "codex",

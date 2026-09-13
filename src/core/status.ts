@@ -2,51 +2,74 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLanguageServerConfig, LanguageRegistry } from "../adapters/language-registry.js";
-import { loadConfig } from "./config.js";
+import { createLanguageServerConfig, LanguageRegistry, resolveLanguageServerWorkspace } from "../adapters/language-registry.js";
+import { loadConfig, configFile } from "./config.js";
 import { resolveDiagnosticsTimeout, type ResolvedDiagnosticsTimeout } from "./diagnostics-timeout.js";
+import type { WorkspaceRuntime } from "./workspace-runtime.js";
 
-type DoctorLanguageResult = {
+/**
+ * Bridge Status (docs/THESAURUS.md, "Bridge Status"): the single
+ * health/configuration operation. Reports resolved configuration, per-language
+ * server availability and Language Server Workspace, executable resolution,
+ * seed-file availability, diagnostics configuration, Codex integration state,
+ * build freshness, and already-known runtime state — without starting all
+ * Language Servers just to answer.
+ */
+export interface BridgeStatusLanguage {
   language: string;
   command: string;
   status: "ok" | "missing";
   supportLevel: "primary" | "experimental";
   installHint: string;
+  workspacePath?: string;
+  languageServerWorkspace?: string;
   path?: string;
   seedFile?: string;
-};
+}
 
-export interface DoctorResult {
-  languages: DoctorLanguageResult[];
-  codex: {
-    mcpConfigured: boolean;
-    hookConfigured: boolean;
-    instructionsConfigured: boolean;
-  };
+export interface BridgeCodexState {
+  mcpConfigured: boolean;
+  hookConfigured: boolean;
+  instructionsConfigured: boolean;
+}
+
+export interface BridgeStatus {
+  workspaceRoot: string;
+  configFilePresent: boolean;
+  languages: BridgeStatusLanguage[];
+  codex: BridgeCodexState;
   build: {
     distExists: boolean;
     stale: boolean;
   };
   diagnostics: ResolvedDiagnosticsTimeout;
+  runtime: {
+    activeProviders: number;
+  };
   recommendations: string[];
 }
 
-export function runDoctor(rootPath: string): DoctorResult {
+export function collectBridgeStatus(rootPath: string, runtime?: WorkspaceRuntime): BridgeStatus {
   const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-  const config = loadConfig(rootPath);
-  const diagnostics = resolveDiagnosticsTimeout(rootPath, config.diagnosticsTimeoutMs);
-  const registry = LanguageRegistry.fromMergedConfig(config);
-  const languages: DoctorLanguageResult[] = registry.languages().map((language) => {
-    const serverConfig = createLanguageServerConfig(language, registry.descriptor(language), rootPath);
-    const executablePath = findExecutable(serverConfig.server.command);
+  const config = runtime?.config ?? loadConfig(rootPath);
+  const diagnostics = runtime ? runtime.diagnostics : resolveDiagnosticsTimeout(rootPath, config.diagnosticsTimeoutMs);
+  const registry = runtime?.languageRegistry ?? LanguageRegistry.fromMergedConfig(config);
+  const languages: BridgeStatusLanguage[] = registry.languages().map((language) => {
+    const descriptor = registry.descriptor(language);
+    const workspacePath = descriptor.workspacePath ?? ".";
+    const languageServerWorkspace = resolveLanguageServerWorkspace(rootPath, workspacePath);
+    const serverConfig = createLanguageServerConfig(language, descriptor, rootPath);
+    const executablePath = findExecutable(languageServerWorkspace, rootPath, serverConfig.server.command);
     return {
       language,
       command: serverConfig.server.command,
-      status: (executablePath ? "ok" : "missing") as DoctorLanguageResult["status"],
+      status: (executablePath ? "ok" : "missing") as BridgeStatusLanguage["status"],
       supportLevel: serverConfig.supportLevel,
       installHint: serverConfig.installHint,
-      seedFile: findSeedFile(rootPath, serverConfig.workspaceSeedFiles, serverConfig.extensions),
+      ...(descriptor.workspacePath !== undefined ? { workspacePath: descriptor.workspacePath } : {}),
+      languageServerWorkspace,
+      seedFile: findSeedFile(languageServerWorkspace, serverConfig.workspaceSeedFiles, serverConfig.extensions),
       ...(executablePath ? { path: executablePath } : {})
     };
   });
@@ -56,19 +79,25 @@ export function runDoctor(rootPath: string): DoctorResult {
     instructionsConfigured: readText(path.join(codexHome, "AGENTS.md")).includes("BEGIN codex-lsp-bridge")
   };
   const build = inspectBuildFreshness(packageRoot);
+  const recommendations = buildRecommendations(languages, codex, build);
   return {
+    workspaceRoot: rootPath,
+    configFilePresent: fs.existsSync(path.join(rootPath, ".codex", configFile)),
     languages,
     codex,
     build,
     diagnostics,
-    recommendations: buildRecommendations(languages, codex, build)
+    runtime: {
+      activeProviders: runtime?.providers.activeProviderCount ?? 0
+    },
+    recommendations
   };
 }
 
 function buildRecommendations(
-  languages: DoctorResult["languages"],
-  codex: DoctorResult["codex"],
-  build: DoctorResult["build"]
+  languages: BridgeStatus["languages"],
+  codex: BridgeCodexState,
+  build: BridgeStatus["build"]
 ): string[] {
   const recommendations: string[] = [];
   for (const language of languages) {
@@ -85,9 +114,16 @@ function buildRecommendations(
   return recommendations;
 }
 
-function findExecutable(command: string): string | undefined {
+function findExecutable(languageServerWorkspace: string, workspaceRootPath: string, command: string): string | undefined {
   if (command.includes(path.sep)) {
     return isExecutable(command) ? command : undefined;
+  }
+
+  for (const directory of [
+    path.join(languageServerWorkspace, "node_modules", ".bin"),
+    path.join(workspaceRootPath, "node_modules", ".bin")
+  ]) {
+    if (isExecutable(path.join(directory, command))) return path.join(directory, command);
   }
 
   const pathEntries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
@@ -103,12 +139,12 @@ function findExecutable(command: string): string | undefined {
   return undefined;
 }
 
-function findSeedFile(rootPath: string, seedFiles: string[], extensions: string[]): string | undefined {
+function findSeedFile(languageServerWorkspace: string, seedFiles: string[], extensions: string[]): string | undefined {
   for (const seed of seedFiles) {
-    const filePath = path.join(rootPath, seed);
+    const filePath = path.join(languageServerWorkspace, seed);
     if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) return filePath;
   }
-  return findFirstSourceFile(rootPath, extensions);
+  return findFirstSourceFile(languageServerWorkspace, extensions);
 }
 
 function findFirstSourceFile(rootPath: string, extensions: string[]): string | undefined {

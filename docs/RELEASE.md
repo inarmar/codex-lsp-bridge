@@ -7,14 +7,14 @@ Use this checklist before publishing `codex-lsp-bridge`.
 ```bash
 npm ci
 npm run ci:verify
-node dist/index.js doctor --root .
+node dist/index.js status --root .
 ```
 
 Expected:
 
 - `ci:verify` passes type-check, coverage tests, build, package verification, install smoke, and package install smoke.
-- `doctor` reports `distExists: true` and `stale: false`.
-- `doctor.recommendations` is either empty or contains only environment-specific language-server install hints.
+- `status` reports `build.distExists: true` and `build.stale: false`.
+- `status.recommendations` is either empty or contains only environment-specific language-server install hints.
 
 ## Version
 
@@ -47,9 +47,7 @@ npm publish --access public
 ## Post-Publish Smoke
 
 ```bash
-npx codex-lsp-bridge@latest install --dry-run
-npx codex-lsp-bridge@latest doctor --root .
-npx codex-lsp-bridge@latest uninstall --dry-run
+npx codex-lsp-bridge@latest status --root .
 ```
 
 ## Codex Plugin Marketplace

@@ -1,7 +1,7 @@
 # Codex Plugin Marketplace Notes
 
-`codex-lsp-bridge` is packaged so it can be installed either through its npm
-installer or through Codex plugin metadata.
+`codex-lsp-bridge` is packaged so it can be installed either manually (npm
+package + config registration) or through Codex plugin metadata.
 
 ## Positioning
 
@@ -22,10 +22,11 @@ granting write access or allowing workspace-root escape.
 
 ```bash
 npm install -g codex-lsp-bridge
-codex-lsp-bridge install
 ```
 
-When a marketplace entry is available:
+Register the MCP server, hook, and skill manually as described in the README's
+"Codex Registration", then restart Codex. When a marketplace entry is
+available:
 
 ```bash
 codex plugin add codex-lsp-bridge@<marketplace>
@@ -55,5 +56,5 @@ After install, restart Codex and use:
 npm run ci:verify
 ```
 
-This verifies tests, build, npm pack contents, installer behavior, and a real
-tarball install smoke.
+This verifies tests, build, npm pack contents, and a real tarball install
+smoke.

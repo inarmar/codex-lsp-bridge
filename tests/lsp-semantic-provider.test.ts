@@ -113,7 +113,7 @@ describe("LspSemanticProvider", () => {
       });
     };
 
-    await expect(provider.diagnostics(uri)).resolves.toMatchObject({
+    await expect(provider.diagnostics(filePath)).resolves.toMatchObject({
       status: "ok",
       timedOut: false,
       items: [{ file: expect.any(String), line: 2, character: 3, severity: "error", message: "missing id" }]
@@ -148,9 +148,9 @@ describe("LspSemanticProvider", () => {
       }, 0);
     };
 
-    await expect(provider.diagnostics(uri)).resolves.toMatchObject({ items: [{ line: 2, message: "version 1" }] });
+    await expect(provider.diagnostics(filePath)).resolves.toMatchObject({ items: [{ line: 2, message: "version 1" }] });
     await fs.writeFile(filePath, "export const Editor = 2;\n", "utf8");
-    await expect(provider.diagnostics(uri)).resolves.toMatchObject({ items: [{ line: 3, message: "version 2" }] });
+    await expect(provider.diagnostics(filePath)).resolves.toMatchObject({ items: [{ line: 3, message: "version 2" }] });
     await expect(provider.definitionAt({ file: filePath, line: 1, character: 14 })).rejects.toThrow(
       "No source definition found"
     );
@@ -163,7 +163,7 @@ describe("LspSemanticProvider", () => {
     const provider = createProvider();
     const uri = filePathToUri(filePath);
 
-    await expect(provider.diagnostics(uri)).resolves.toMatchObject({
+    await expect(provider.diagnostics(filePath)).resolves.toMatchObject({
       status: "timed_out",
       timedOut: true,
       stale: false,
@@ -186,7 +186,7 @@ describe("LspSemanticProvider", () => {
       }, 35);
     };
 
-    await expect(provider.diagnostics(uri, { timeoutMs: 80 })).resolves.toMatchObject({
+    await expect(provider.diagnostics(filePath, { timeoutMs: 80 })).resolves.toMatchObject({
       status: "ok",
       timedOut: false,
       items: []
@@ -204,7 +204,7 @@ describe("LspSemanticProvider", () => {
       clientFactory: (server) => new JsonRpcLspClient(server)
     });
 
-    await expect(provider.diagnostics(filePathToUri(filePath))).resolves.toMatchObject({
+    await expect(provider.diagnostics(filePath)).resolves.toMatchObject({
       status: "unavailable",
       timedOut: false,
       stale: false,
@@ -220,8 +220,8 @@ describe("LspSemanticProvider", () => {
     await fs.symlink(outsidePath, symlinkPath);
     const provider = createProvider();
 
-    await expect(provider.diagnostics(filePathToUri(outsidePath))).rejects.toThrow("outside workspace root");
-    await expect(provider.diagnostics(filePathToUri(symlinkPath))).rejects.toThrow("outside workspace root");
+    await expect(provider.diagnostics(outsidePath)).rejects.toThrow("outside workspace root");
+    await expect(provider.diagnostics(symlinkPath)).rejects.toThrow("outside workspace root");
     await fs.rm(path.dirname(outsidePath), { recursive: true, force: true });
   });
 
@@ -396,21 +396,22 @@ describe("LspSemanticProvider", () => {
       }
     ];
 
-    const listed = await provider.codeActions(
+    const listed = await provider.listCodeActions(
       filePath,
       { start: { line: 1, character: 14 }, end: { line: 1, character: 14 } },
       ["refactor"]
     );
-    expect(listed.actions).toEqual([
-      { index: 0, title: "Rename Editor", kind: "refactor.rename", isPreferred: true, hasEdit: true, hasCommand: false }
+    expect(listed.candidates).toEqual([
+      expect.objectContaining({
+        title: "Rename Editor",
+        kind: "refactor.rename",
+        isPreferred: true,
+        hasEdit: true,
+        hasCommand: false
+      })
     ]);
-    const applied = await provider.codeActions(
-      filePath,
-      { start: { line: 1, character: 14 }, end: { line: 1, character: 14 } },
-      ["refactor"],
-      0
-    );
-    expect(applied.applied).toMatchObject({ index: 0, title: "Rename Editor", editCount: 1, commandExecuted: false });
+    const applied = await provider.applyCodeAction({ file: filePath, raw: listed.candidates[0].raw });
+    expect(applied).toMatchObject({ title: "Rename Editor", editCount: 1, commandExecuted: false });
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("export const Renamed = 1;\n");
   });
 
@@ -419,14 +420,13 @@ describe("LspSemanticProvider", () => {
     client.codeActionResult = [{ title: "Organize imports", data: { id: 1 } }];
     client.codeActionResolveResult = { title: "Organize imports", command: { command: "organize.imports", arguments: ["x"] } };
 
-    const result = await provider.codeActions(
+    const listed = await provider.listCodeActions(
       filePath,
-      { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } },
-      undefined,
-      0
+      { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } }
     );
+    const result = await provider.applyCodeAction({ file: filePath, raw: listed.candidates[0].raw });
 
-    expect(result.applied).toMatchObject({ title: "Organize imports", commandExecuted: true, editCount: 0 });
+    expect(result).toMatchObject({ title: "Organize imports", commandExecuted: true, editCount: 0 });
     expect(client.requests.map(({ method }) => method)).toContain("workspace/executeCommand");
   });
 
@@ -434,13 +434,13 @@ describe("LspSemanticProvider", () => {
     const provider = createProvider();
     client.codeActionResult = null;
 
-    const result = await provider.codeActions(
+    const result = await provider.listCodeActions(
       filePath,
       { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } },
       []
     );
 
-    expect(result).toEqual({ actions: [] });
+    expect(result).toEqual({ candidates: [] });
     const request = client.requests.find(({ method }) => method === "textDocument/codeAction");
     expect(request?.params).not.toMatchObject({ context: { only: expect.anything() } });
   });
@@ -458,30 +458,76 @@ describe("LspSemanticProvider", () => {
       }
     };
 
-    const result = await provider.codeActions(
+    const listed = await provider.listCodeActions(
       filePath,
-      { start: { line: 1, character: 14 }, end: { line: 1, character: 14 } },
-      undefined,
-      0
+      { start: { line: 1, character: 14 }, end: { line: 1, character: 14 } }
     );
+    const result = await provider.applyCodeAction({ file: filePath, raw: listed.candidates[0].raw });
 
-    expect(result.actions[0]).toMatchObject({ isPreferred: false, hasEdit: false });
-    expect(result.applied).toMatchObject({ title: "Rename Editor", editCount: 1 });
+    expect(listed.candidates[0]).toMatchObject({ isPreferred: false, hasEdit: false });
+    expect(result).toMatchObject({ title: "Rename Editor", editCount: 1 });
     expect(client.requests.map(({ method }) => method)).toContain("codeAction/resolve");
     await expect(fs.readFile(filePath, "utf8")).resolves.toContain("Renamed");
   });
 
-  it("rejects an invalid or non-executable code-action selection", async () => {
+  it("rejects applying a non-executable code action", async () => {
     const provider = createProvider();
-    client.codeActionResult = [{ title: "Unavailable", data: { action: "unknown" } }];
-    client.codeActionResolveResult = null;
 
     await expect(
-      provider.codeActions(filePath, { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } }, undefined, 1)
-    ).rejects.toThrow("out of range");
-    await expect(
-      provider.codeActions(filePath, { start: { line: 1, character: 1 }, end: { line: 1, character: 1 } }, undefined, 0)
+      provider.applyCodeAction({ file: filePath, raw: "not an action" })
     ).rejects.toThrow("not executable");
+    await expect(
+      provider.applyCodeAction({ file: filePath, raw: { title: "Unavailable", data: { action: "unknown" } } })
+    ).rejects.toThrow("not executable");
+  });
+
+  it("includes overlapping known diagnostics in the code action context", async () => {
+    const provider = createProvider();
+    const uri = filePathToUri(await fs.realpath(filePath));
+    const cursorRange = { start: { line: 1, character: 13 }, end: { line: 1, character: 19 } };
+    client.codeActionResult = [];
+    client.onNotify = (method, params) => {
+      if (method !== "textDocument/didOpen" && method !== "textDocument/didChange") return;
+      const documentUri = (params as { textDocument: { uri: string } }).textDocument.uri;
+      setTimeout(() => {
+        client.emit("notification", "textDocument/publishDiagnostics", {
+          uri: documentUri,
+          diagnostics: [
+            {
+              range: { start: { line: 0, character: 6 }, end: { line: 0, character: 19 } },
+              severity: 1,
+              message: "overlap me",
+              source: "ts"
+            },
+            {
+              range: { start: { line: 3, character: 0 }, end: { line: 3, character: 4 } },
+              severity: 2,
+              message: "distant diagnostic",
+              source: "ts"
+            }
+          ]
+        });
+      }, 0);
+    };
+
+    await provider.diagnostics(filePath, { timeoutMs: 50 });
+    await provider.listCodeActions(filePath, { start: { line: 1, character: 1 }, end: { line: 1, character: 19 } });
+
+    const request = client.requests.find(({ method }) => method === "textDocument/codeAction");
+    expect(request?.params).toMatchObject({
+      context: {
+        diagnostics: [{ message: "overlap me", severity: 1 }]
+      }
+    });
+
+    // Known Diagnostics snapshot carries full raw ranges with the end preserved.
+    const snapshot = await provider.knownDiagnosticsSnapshot(filePath);
+    expect(snapshot.filePath).toBe(await fs.realpath(filePath));
+    expect(snapshot.diagnostics[0]).toMatchObject({
+      range: { start: { line: 0, character: 6 }, end: { line: 0, character: 19 } },
+      message: "overlap me"
+    });
+    expect(snapshot.diagnostics[1]).toMatchObject({ message: "distant diagnostic" });
   });
 
 
@@ -494,7 +540,7 @@ describe("LspSemanticProvider", () => {
     expect(before).toMatchObject({ oldPath: await fs.realpath(filePath), newPath, renamed: false, editCount: 0 });
     expect(client.requests.at(-1)?.method).toBe("workspace/willRenameFiles");
 
-    await provider.diagnostics(filePathToUri(filePath), { timeoutMs: 20 }).catch(() => undefined);
+    await provider.diagnostics(filePath, { timeoutMs: 20 }).catch(() => undefined);
     await fs.rename(filePath, newPath);
     const after = await provider.notifyFilesRenamed(filePath, newPath);
 
@@ -543,7 +589,7 @@ describe("LspSemanticProvider", () => {
     const uri = filePathToUri(await fs.realpath(filePath));
 
     // Open the document so the bridge tracks its version.
-    await provider.diagnostics(uri, { timeoutMs: 20 }).catch(() => undefined);
+    await provider.diagnostics(filePath, { timeoutMs: 20 }).catch(() => undefined);
     const openedNotifications = client.notifications.filter((entry) => entry.method === "textDocument/didOpen");
     expect(openedNotifications.length).toBeGreaterThan(0);
 

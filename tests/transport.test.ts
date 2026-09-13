@@ -1,326 +1,418 @@
 import { describe, expect, it } from "vitest";
-import { dispatch, handleJsonRpcLine, handleRequest } from "../src/transport/mcp.js";
-import { CommandService } from "../src/core/command-service.js";
-import type { CodeActionResult, DiagnosticReport, FileRenameSummary, HoverInfo, Location, RenameSummary, SemanticProvider, SymbolMatch } from "../src/core/types.js";
+import { decodeToolCall, dispatch, handleJsonRpcLine, handleRequest, listTools, type McpRuntime } from "../src/transport/mcp.js";
+import type { BridgeRequest } from "../src/core/operations.js";
+import { OperationParseError } from "../src/core/operations.js";
 
-class EmptyProvider implements SemanticProvider {
-  constructor(private readonly label = "default") {}
-  readonly diagnosticTimeouts: Array<number | undefined> = [];
+/** Captures BridgeRequests and answers with canned results by operation kind. */
+class RecordingRuntime implements McpRuntime {
+  readonly requests: BridgeRequest[] = [];
+  readonly results: Record<string, unknown> = {};
+  failWith?: Error;
 
-  diagnostics(_uri?: string, options?: { timeoutMs?: number }): Promise<DiagnosticReport> {
-    this.diagnosticTimeouts.push(options?.timeoutMs);
-    return Promise.resolve({
-      status: "ok",
-      timedOut: false,
-      stale: false,
-      items:
-        this.label === "default"
-          ? []
-          : [
-              {
-                file: `${this.label}/src/a.ts`,
-                line: 1,
-                character: 1,
-                severity: "error",
-                message: `${this.label} diagnostic`
-              }
-            ]
-    });
-  }
-  definition(): Promise<Location> {
-    return Promise.resolve({ file: "src/a.ts", line: 1, character: 1 });
-  }
-  definitionAt(): Promise<Location> {
-    return Promise.resolve({ file: "src/position.ts", line: 2, character: 3 });
-  }
-  references(): Promise<Location[]> {
-    return Promise.resolve([]);
-  }
-  referencesAt(): Promise<Location[]> {
-    return Promise.resolve([{ file: "src/position.ts", line: 2, character: 3 }]);
-  }
-  symbols(): Promise<SymbolMatch[]> {
-    return Promise.resolve([]);
-  }
-  hover(): Promise<HoverInfo> {
-    return Promise.resolve({ file: "src/a.ts", line: 1, character: 1, contents: "hover" });
-  }
-  hoverAt(): Promise<HoverInfo> {
-    return Promise.resolve({ file: "src/position.ts", line: 2, character: 3, contents: "position hover" });
-  }
-  rename(_position: { file: string; line: number; character: number }, newName: string): Promise<RenameSummary> {
-    return Promise.resolve({
-      newName,
-      changedFiles: ["src/a.ts"],
-      createdFiles: [],
-      renamedFiles: [],
-      deletedFiles: [],
-      editCount: 1
-    });
-  }
-  codeActions(): Promise<CodeActionResult> {
-    return Promise.resolve({ actions: [] });
-  }
-  willRenameFiles(oldPath: string, newPath: string, renamed = false): Promise<FileRenameSummary> {
-    return Promise.resolve({ oldPath, newPath, renamed, changedFiles: [], createdFiles: [], renamedFiles: [], deletedFiles: [], editCount: 0 });
-  }
-  notifyFilesRenamed(oldPath: string, newPath: string): Promise<FileRenameSummary> {
-    return this.willRenameFiles(oldPath, newPath, true);
-  }
-  dispose(): Promise<void> {
-    return Promise.resolve();
+  async execute(request: BridgeRequest): Promise<unknown> {
+    this.requests.push(request);
+    if (this.failWith) throw this.failWith;
+    const result = this.results[request.operation.kind];
+    return result !== undefined ? result : { kind: request.operation.kind };
   }
 }
 
-describe("MCP dispatch", () => {
+function toolCall(name: string, args: Record<string, unknown>) {
+  return { method: "tools/call", params: { name, arguments: args } };
+}
+
+function expectReject(runtime: McpRuntime, request: Record<string, unknown>, message: string): void {
+  expect(dispatch(runtime, request)).rejects.toThrow(message);
+}
+
+function expectRejectWithCode(runtime: McpRuntime, request: Record<string, unknown>, code: number): Promise<unknown> {
+  return handleRequest(runtime, { id: 1, ...request }).then((response) => {
+    expect(response).toMatchObject({ id: 1, error: { code } });
+  });
+}
+
+const toolsByName = new Map(listTools().map((tool) => {
+  const record = tool as { name: string };
+  return [record.name, tool];
+}));
+
+describe("MCP protocol surface", () => {
   it("implements the MCP initialize and tools/list handshake", async () => {
-    const service = new CommandService(new EmptyProvider());
+    const runtime = new RecordingRuntime();
 
-    await expect(dispatch(service, { method: "initialize" })).resolves.toMatchObject({
+    await expect(dispatch(runtime, { method: "initialize" })).resolves.toMatchObject({
+      protocolVersion: "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "codex-lsp-bridge" }
+      serverInfo: { name: "codex-lsp-bridge", version: "0.5.0" }
     });
-    await expect(dispatch(service, { method: "tools/list" })).resolves.toMatchObject({
-      tools: expect.arrayContaining([
-        expect.objectContaining({
-          name: "lsp_diagnostics",
-          annotations: expect.objectContaining({ readOnlyHint: true, destructiveHint: false })
-        }),
-        expect.objectContaining({ name: "lsp_definition" }),
-        expect.objectContaining({ name: "lsp_references" }),
-        expect.objectContaining({ name: "lsp_symbols" }),
-        expect.objectContaining({ name: "lsp_hover" }),
-        expect.objectContaining({ name: "lsp_rename", annotations: expect.objectContaining({ readOnlyHint: false }) }),
-        expect.objectContaining({ name: "lsp_code_actions", annotations: expect.objectContaining({ readOnlyHint: false }) }),
-        expect.objectContaining({ name: "lsp_will_rename_files", annotations: expect.objectContaining({ readOnlyHint: false }) }),
-        expect.objectContaining({ name: "lsp_status" })
-      ])
+    const listed = await dispatch(runtime, { method: "tools/list" }) as { tools: unknown[] };
+    const names = (listed.tools as Array<{ name: string; annotations: { readOnlyHint: boolean } }>).map((tool) => tool.name);
+    expect(names).toEqual([
+      "lsp_diagnostics",
+      "lsp_directory_diagnostics",
+      "lsp_definition",
+      "lsp_references",
+      "lsp_symbols",
+      "lsp_hover",
+      "lsp_rename",
+      "lsp_code_actions",
+      "lsp_apply_code_action",
+      "lsp_will_rename_files",
+      "lsp_status"
+    ]);
+    expect(listed.tools[0]).toMatchObject({
+      name: "lsp_diagnostics",
+      annotations: { readOnlyHint: true, destructiveHint: false }
     });
-  });
-
-  it("routes supported lsp methods", async () => {
-    const service = new CommandService(new EmptyProvider());
-
-    await expect(dispatch(service, { method: "lsp.diagnostics" })).resolves.toMatchObject({ total: 0 });
-    await expect(dispatch(service, { method: "lsp.definition", params: { symbol: "Editor" } })).resolves.toMatchObject({
-      file: "src/a.ts"
+    expect(listed.tools.find((tool) => (tool as { name: string }).name === "lsp_rename")).toMatchObject({
+      annotations: { readOnlyHint: false }
     });
-    await expect(
-      dispatch(service, { method: "lsp.definition", params: { file: "src/index.ts", line: 2, character: 10 } })
-    ).resolves.toMatchObject({
-      file: "src/position.ts"
+    expect(listed.tools.find((tool) => (tool as { name: string }).name === "lsp_code_actions")).toMatchObject({
+      annotations: { readOnlyHint: false }
     });
   });
 
-  it("validates write-tool arguments before dispatch", async () => {
-    const service = new CommandService(new EmptyProvider());
+  it("routes tools/call requests through the single runtime.execute", async () => {
+    const runtime = new RecordingRuntime();
 
-    await expect(
-      dispatch(service, { method: "tools/call", params: { name: "lsp_code_actions", arguments: { file: "src/a.ts", apply: -1 } } })
-    ).rejects.toThrow("apply parameter must be a non-negative integer");
-    await expect(
-      dispatch(service, { method: "tools/call", params: { name: "lsp_code_actions", arguments: { file: "src/a.ts", only: "quickfix" } } })
-    ).rejects.toThrow("only parameter must be an array of strings");
-    await expect(
-      dispatch(service, { method: "tools/call", params: { name: "lsp_code_actions", arguments: { file: "src/a.ts", line: 2, end_line: 1 } } })
-    ).rejects.toThrow("range end must not precede range start");
-    await expect(
-      dispatch(service, { method: "tools/call", params: { name: "lsp_will_rename_files", arguments: { old_path: "a.ts", new_path: "b.ts", renamed: "yes" } } })
-    ).rejects.toThrow("renamed parameter must be a boolean");
-  });
-
-
-  it("routes MCP tools/call requests to the canonical LSP command handlers", async () => {
-    const service = new CommandService(new EmptyProvider());
-
-    await expect(
-      dispatch(service, { method: "tools/call", params: { name: "lsp_symbols", arguments: { query: "Editor" } } })
-    ).resolves.toMatchObject({
+    await expect(dispatch(runtime, toolCall("lsp_status", {}))).resolves.toMatchObject({
       content: [{ type: "text" }],
-      structuredContent: []
+      structuredContent: { kind: "status" }
     });
     await expect(
-      dispatch(service, {
-        method: "tools/call",
-        params: { name: "lsp_definition", arguments: { file: "src/index.ts", line: 2, character: 10 } }
-      })
-    ).resolves.toMatchObject({
-      structuredContent: { file: "src/position.ts" }
+      dispatch(runtime, toolCall("lsp_definition", { symbol: "Editor" }))
+    ).resolves.toMatchObject({ structuredContent: { kind: "definitionBySymbol" } });
+    await expect(
+      dispatch(runtime, toolCall("lsp_symbols", { query: "Editor", language: "typescript" }))
+    ).resolves.toMatchObject({ structuredContent: { kind: "symbols" } });
+    expect(runtime.requests.at(-1)).toMatchObject({ operation: { kind: "symbols", query: "Editor", language: "typescript" } });
+  });
+
+  it("decodes position and symbol modes into typed variants", async () => {
+    const runtime = new RecordingRuntime();
+
+    await expect(dispatch(runtime, toolCall("lsp_definition", { file: "src/index.ts", line: 2, character: 10 }))).resolves.toMatchObject({
+      structuredContent: { kind: "definitionAt" }
     });
+    expect(runtime.requests.at(-1)).toMatchObject({
+      operation: { kind: "definitionAt", file: "src/index.ts", line: 2, character: 10 }
+    });
+
     await expect(
-      dispatch(service, { method: "tools/call", params: { name: "lsp_rename", arguments: { file: "src/a.ts", line: 1, character: 1, new_name: "Renamed" } } })
-    ).resolves.toMatchObject({ structuredContent: { newName: "Renamed" } });
+      dispatch(runtime, toolCall("lsp_references", { symbol: "Editor", language: "rust" }))
+    ).resolves.toMatchObject({ structuredContent: { kind: "referencesBySymbol" } });
     await expect(
-      dispatch(service, { method: "tools/call", params: { name: "lsp_code_actions", arguments: { file: "src/a.ts" } } })
-    ).resolves.toMatchObject({ structuredContent: { actions: [] } });
+      dispatch(runtime, toolCall("lsp_hover", { file: "src/index.ts", line: 2, character: 10 }))
+    ).resolves.toMatchObject({ structuredContent: { kind: "hoverAt" } });
+  });
+
+  it("rejects definitions mixing symbol and position or partially specifying a position", async () => {
+    const runtime = new RecordingRuntime();
+
+    await expectReject(runtime, toolCall("lsp_definition", { symbol: "Editor", file: "src/a.ts", line: 1, character: 1 }), "cannot be combined");
+    await expectReject(runtime, toolCall("lsp_definition", { file: "src/a.ts", line: 1 }), "character parameter must be a positive integer");
+    await expectReject(runtime, toolCall("lsp_definition", { file: "src/a.ts", line: 1, character: 1, language: "typescript" }), "only valid for symbol-based lookups");
+    await expectReject(runtime, toolCall("lsp_definition", {}), "symbol or file+line+character is required");
+  });
+
+  it("routes the rename tool to the renameAt operation with newName", async () => {
+    const runtime = new RecordingRuntime();
+
     await expect(
-      dispatch(service, { method: "tools/call", params: { name: "lsp_will_rename_files", arguments: { old_path: "src/a.ts", new_path: "src/b.ts" } } })
-    ).resolves.toMatchObject({ structuredContent: { renamed: false, oldPath: "src/a.ts", newPath: "src/b.ts" } });
-    await expect(
-      dispatch(service, { method: "tools/call", params: { name: "lsp_status", arguments: {} } }, { status: () => ({ ok: true }) })
-    ).resolves.toMatchObject({
-      structuredContent: { ok: true }
+      dispatch(runtime, toolCall("lsp_rename", { file: "src/a.ts", line: 1, character: 1, new_name: "Renamed" }))
+    ).resolves.toMatchObject({ structuredContent: { kind: "renameAt" } });
+    expect(runtime.requests.at(-1)).toMatchObject({
+      operation: { kind: "renameAt", file: "src/a.ts", newName: "Renamed" }
     });
   });
 
-  it("routes the post-move file notification through the provider", async () => {
-    const service = new CommandService(new EmptyProvider());
+  it("requires a cursor position for code actions with optional selection", async () => {
+    const runtime = new RecordingRuntime();
 
+    await expectReject(runtime, toolCall("lsp_code_actions", { file: "src/a.ts" }), "line parameter must be a positive integer");
     await expect(
-      dispatch(service, {
-        method: "tools/call",
-        params: { name: "lsp_will_rename_files", arguments: { old_path: "src/a.ts", new_path: "src/b.ts", renamed: true } }
-      })
-    ).resolves.toMatchObject({ structuredContent: { renamed: true } });
-  });
-
-
-  it("passes timeoutMs to file diagnostics and rejects directory-only timeoutBudgetMs for files", async () => {
-    const provider = new EmptyProvider();
-    const service = new CommandService(provider);
-
-    await expect(
-      dispatch(service, {
-        method: "tools/call",
-        params: { name: "lsp_diagnostics", arguments: { file: "src/index.ts", timeoutMs: 15000 } }
-      })
-    ).resolves.toMatchObject({
-      structuredContent: { total: 0 }
+      dispatch(runtime, toolCall("lsp_code_actions", { file: "src/a.ts", line: 3, character: 5 }))
+    ).resolves.toMatchObject({ structuredContent: { kind: "listCodeActions" } });
+    expect(runtime.requests.at(-1)).toMatchObject({
+      operation: { kind: "listCodeActions", file: "src/a.ts", line: 3, character: 5 }
     });
-    expect(provider.diagnosticTimeouts).toEqual([15000]);
-
+    await expectReject(runtime, toolCall("lsp_code_actions", { file: "src/a.ts", line: 1, character: 1, end_line: 2 }), "must be provided together");
+    await expectReject(runtime, toolCall("lsp_code_actions", { file: "src/a.ts", line: 5, character: 1, end_line: 1, end_character: 1 }), "must not precede range start");
     await expect(
-      dispatch(service, {
-        method: "tools/call",
-        params: { name: "lsp_diagnostics", arguments: { file: "src/index.ts", timeoutBudgetMs: 15000 } }
-      })
-    ).rejects.toThrow("timeoutBudgetMs is only valid for directory diagnostics");
+      dispatch(runtime, toolCall("lsp_code_actions", { file: "src/a.ts", line: 1, character: 1, end_line: 3, end_character: 7, only: ["quickfix"] }))
+    ).resolves.toMatchObject({ structuredContent: { kind: "listCodeActions" } });
+    expect(runtime.requests.at(-1)).toMatchObject({ operation: { kind: "listCodeActions", endLine: 3, endCharacter: 7, only: ["quickfix"] } });
   });
 
-  it("allows MCP runtimes to select a scoped workspace service from tool arguments", async () => {
-    const defaultService = new CommandService(new EmptyProvider());
-    const scopedService = new CommandService(new EmptyProvider("detached"));
-    const seenParams: Record<string, unknown>[] = [];
+  it("rejects the legacy apply index on code actions", async () => {
+    const runtime = new RecordingRuntime();
+
+    await expectReject(runtime, toolCall("lsp_code_actions", { file: "src/a.ts", line: 1, character: 1, apply: 0 }), "unexpected parameter 'apply'");
+  });
+
+  it("routes apply code action by stable handle", async () => {
+    const runtime = new RecordingRuntime();
 
     await expect(
-      dispatch(
-        defaultService,
-        {
-          method: "tools/call",
-          params: {
-            name: "lsp_diagnostics",
-            arguments: { file: "/tmp/pr-review/src/a.ts", root: "/tmp/pr-review" }
-          }
-        },
-        {
-          serviceForParams: (params) => {
-            seenParams.push(params);
-            return scopedService;
-          }
-        }
-      )
-    ).resolves.toMatchObject({
-      structuredContent: {
-        total: 1,
-        items: [{ file: "detached/src/a.ts", message: "detached diagnostic" }]
-      }
+      dispatch(runtime, toolCall("lsp_apply_code_action", { id: "ca-1" }))
+    ).resolves.toMatchObject({ structuredContent: { kind: "applyCodeAction" } });
+    expect(runtime.requests.at(-1)).toMatchObject({ operation: { kind: "applyCodeAction", id: "ca-1" } });
+    await expectReject(runtime, toolCall("lsp_apply_code_action", {}), "id parameter is required");
+  });
+
+  it("routes file-rename sync with renamed flag", async () => {
+    const runtime = new RecordingRuntime();
+
+    await expect(
+      dispatch(runtime, toolCall("lsp_will_rename_files", { old_path: "src/a.ts", new_path: "src/b.ts" }))
+    ).resolves.toMatchObject({ structuredContent: { kind: "willRenameFiles" } });
+    expect(runtime.requests.at(-1)).toMatchObject({
+      operation: { kind: "willRenameFiles", oldPath: "src/a.ts", newPath: "src/b.ts", renamed: false }
     });
-    expect(seenParams).toEqual([{ file: "/tmp/pr-review/src/a.ts", root: "/tmp/pr-review" }]);
+    await expect(
+      dispatch(runtime, toolCall("lsp_will_rename_files", { old_path: "src/a.ts", new_path: "src/b.ts", renamed: true }))
+    ).resolves.toMatchObject({ structuredContent: { kind: "willRenameFiles" } });
+    expect(runtime.requests.at(-1)).toMatchObject({ operation: { renamed: true } });
+    await expectReject(runtime, toolCall("lsp_will_rename_files", { old_path: "src/a.ts", new_path: "src/b.ts", renamed: "yes" }), "must be a boolean");
+    await expectReject(runtime, toolCall("lsp_will_rename_files", { old_path: "src/a.ts" }), "newPath parameter is required");
   });
 
-  it("keeps the default MCP service when no root argument is provided", async () => {
-    const defaultService = new CommandService(new EmptyProvider());
-    const scopedService = new CommandService(new EmptyProvider("detached"));
-    let scopedCalls = 0;
+  it("passes the root selector through to the runtime", async () => {
+    const runtime = new RecordingRuntime();
 
     await expect(
-      dispatch(
-        defaultService,
-        {
-          method: "tools/call",
-          params: {
-            name: "lsp_diagnostics",
-            arguments: { file: "/tmp/pr-review/src/a.ts" }
-          }
-        },
-        {
-          serviceForParams: () => {
-            scopedCalls += 1;
-            return scopedService;
-          }
-        }
-      )
-    ).resolves.toMatchObject({
-      structuredContent: {
-        total: 0
-      }
-    });
-    expect(scopedCalls).toBe(0);
+      dispatch(runtime, toolCall("lsp_diagnostics", { file: "src/a.ts", root: "/tmp/pr-review" }))
+    ).resolves.toMatchObject({ structuredContent: { kind: "fileDiagnostics" } });
+    expect(runtime.requests.at(-1)).toMatchObject({ root: "/tmp/pr-review" });
+    await expectRejectWithCode(runtime, toolCall("lsp_diagnostics", { file: "src/a.ts", root: 5 }), -32602);
   });
 
-  it("passes directory diagnostics through the runtime with optional root and severity", async () => {
-    const service = new CommandService(new EmptyProvider());
+  it("rejects legacy direct JSON-RPC methods", async () => {
+    const runtime = new RecordingRuntime();
 
-    await expect(
-      dispatch(
-        service,
-        {
-          method: "tools/call",
-          params: {
-            name: "lsp_diagnostics",
-            arguments: { dir: "/tmp/pr-review/src", root: "/tmp/pr-review", severity: "error", maxFiles: 3, timeoutBudgetMs: 1000, concurrency: 2 }
-          }
-        },
-        {
-          directoryDiagnostics: async (request) => request
-        }
-      )
-    ).resolves.toMatchObject({
-      structuredContent: {
-        dir: "/tmp/pr-review/src",
-        root: "/tmp/pr-review",
-        severity: "error",
-        maxFiles: 3,
-        timeoutBudgetMs: 1000,
-        concurrency: 2
-      }
-    });
+    await expectReject(runtime, { method: "lsp.diagnostics" }, "Unsupported method");
+    await expectReject(runtime, { method: "lsp.definition", params: { symbol: "Editor" } }, "Unsupported method");
+    await expectRejectWithCode(runtime, { method: "lsp.hover", params: {} }, -32601);
   });
 
-  it("formats JSON-RPC responses and ignores notifications", async () => {
-    const service = new CommandService(new EmptyProvider());
+  it("formats JSON-RPC responses, ignores notifications, and reports parse errors", async () => {
+    const runtime = new RecordingRuntime();
 
-    await expect(handleRequest(service, { method: "notifications/initialized" })).resolves.toBeUndefined();
-    await expect(handleRequest(service, { id: 1, method: "initialize" })).resolves.toMatchObject({
+    await expect(handleRequest(runtime, { method: "notifications/initialized" })).resolves.toBeUndefined();
+    await expect(handleRequest(runtime, { id: 1, method: "initialize" })).resolves.toMatchObject({
       jsonrpc: "2.0",
       id: 1,
       result: { serverInfo: { name: "codex-lsp-bridge" } }
     });
-    await expect(handleRequest(service, { id: "bad", method: "tools/call", params: { name: "missing" } })).resolves.toMatchObject({
+    await expect(handleRequest(runtime, { id: "bad", method: "tools/call", params: { name: "missing" } })).resolves.toMatchObject({
       jsonrpc: "2.0",
       id: "bad",
       error: { code: -32601, message: "Unsupported tool: missing" }
     });
-    await expect(handleJsonRpcLine(service, "{bad json")).resolves.toMatchObject({
+    await expect(handleJsonRpcLine(runtime, "{bad json")).resolves.toMatchObject({
       jsonrpc: "2.0",
       id: null,
       error: { code: -32700, message: "Parse error" }
     });
-    await expect(handleRequest(service, { id: 2, method: "lsp.hover", params: {} })).resolves.toMatchObject({
-      error: { code: -32602, message: "symbol parameter is required" }
+    await expect(handleRequest(runtime, { id: "no-args", method: "tools/call", params: { name: "lsp_symbols", arguments: "bad" } })).resolves.toMatchObject({
+      error: { code: -32602, message: "arguments parameter must be an object" }
     });
   });
 
-  it("fails closed for unsupported methods and missing parameters", async () => {
-    const service = new CommandService(new EmptyProvider());
+  it("maps parameter validation failures to code -32602", async () => {
+    const runtime = new RecordingRuntime();
 
-    await expect(dispatch(service, { method: "unknown" })).rejects.toThrow("Unsupported method");
-    await expect(dispatch(service, { method: "lsp.hover", params: {} })).rejects.toThrow("symbol parameter is required");
-    await expect(dispatch(service, { method: "lsp.hover", params: { file: "src/index.ts" } })).rejects.toThrow(
-      "line parameter is required"
-    );
-    await expect(dispatch(service, { method: "tools/call", params: { name: "lsp_symbols", arguments: "bad" } })).rejects.toThrow(
-      "arguments parameter must be an object"
-    );
+    await expectRejectWithCode(runtime, toolCall("lsp_diagnostics", {}), -32602);
+    await expectRejectWithCode(runtime, toolCall("lsp_symbols", { query: "" }), -32602);
+  });
+
+  it("maps execution failures to code -32000", async () => {
+    const runtime = new RecordingRuntime();
+    runtime.failWith = new Error("server exploded");
+
+    await expectRejectWithCode(runtime, toolCall("lsp_status", {}), -32000);
+  });
+});
+
+describe("MCP tool schemas", () => {
+  it("declares every field with matching types per tool", () => {
+    const expectations: Record<string, Record<string, string>> = {
+      lsp_diagnostics: { file: "string", timeoutMs: "number" },
+      lsp_directory_diagnostics: { dir: "string", severity: "string", maxFiles: "number", timeoutBudgetMs: "number", concurrency: "number" },
+      lsp_definition: { symbol: "string", language: "string", file: "string", line: "number", character: "number" },
+      lsp_rename: { file: "string", line: "number", character: "number", new_name: "string" },
+      lsp_code_actions: { file: "string", line: "number", character: "number", end_line: "number", end_character: "number", only: "array" },
+      lsp_apply_code_action: { id: "string" },
+      lsp_will_rename_files: { old_path: "string", new_path: "string", renamed: "boolean" },
+      lsp_status: {}
+    };
+
+    for (const [name, fields] of Object.entries(expectations)) {
+      const schema = (toolsByName.get(name) as { inputSchema: { properties: Record<string, { type?: string; items?: { type?: string } }> } }).inputSchema;
+      const properties = schema.properties;
+      for (const [field, type] of Object.entries(fields)) {
+        expect(properties[field]?.type ?? properties[field]?.items?.type).toBe(type);
+      }
+      expect(properties.root?.type).toBe("string");
+    }
+  });
+
+  it("marks required fields exactly where the decoder demands them", () => {
+    const requiredByTool: Record<string, string[]> = {
+      lsp_diagnostics: ["file"],
+      lsp_directory_diagnostics: ["dir"],
+      lsp_definition: [],
+      lsp_references: [],
+      lsp_symbols: ["query"],
+      lsp_hover: [],
+      lsp_rename: ["file", "line", "character", "new_name"],
+      lsp_code_actions: ["file", "line", "character"],
+      lsp_apply_code_action: ["id"],
+      lsp_will_rename_files: ["old_path", "new_path"],
+      lsp_status: []
+    };
+
+    for (const [name, required] of Object.entries(requiredByTool)) {
+      const schema = (toolsByName.get(name) as { inputSchema: { required?: string[] } }).inputSchema;
+      const actual = [...(schema.required ?? [])].sort();
+      expect(actual).toEqual([...required].sort());
+    }
+  });
+});
+
+describe("schema ↔ decoder conformance (mandatory)", () => {
+  /** Minimal validator for the JSON Schema subset the Bridge emits. */
+  function schemaAccepts(schema: Record<string, unknown>, value: unknown): boolean {
+    if (schema.type === "object") {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const record = value as Record<string, unknown>;
+      const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+      for (const key of Object.keys(record)) {
+        if (!(key in properties)) return false; // additionalProperties: false
+        if (!schemaAccepts(properties[key], record[key])) return false;
+      }
+      const required = (schema.required ?? []) as string[];
+      for (const key of required) {
+        if (!(key in record)) return false;
+      }
+      return true;
+    }
+    if (schema.type === "array") {
+      if (!Array.isArray(value)) return false;
+      const items = schema.items as Record<string, unknown>;
+      return value.every((item) => schemaAccepts(items, item));
+    }
+    if (schema.type === "string") {
+      if (typeof value !== "string") return false;
+      const enumValues = schema.enum as string[] | undefined;
+      if (enumValues && !enumValues.includes(value)) return false;
+      return true;
+    }
+    if (schema.type === "number") return typeof value === "number" && Number.isFinite(value);
+    if (schema.type === "boolean") return typeof value === "boolean";
+    return false;
+  }
+
+  function decodedOk(name: string, args: Record<string, unknown>): boolean {
+    try {
+      decodeToolCall(name, args);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  const toolNames = listTools().map((tool) => (tool as { name: string }).name);
+
+  /** A valid baseline argument set per tool (transport names, no root). */
+  const validArgs: Record<string, Record<string, unknown>> = {
+    lsp_diagnostics: { file: "src/a.ts" },
+    lsp_directory_diagnostics: { dir: "src" },
+    lsp_definition: { file: "src/a.ts", line: 1, character: 1 },
+    lsp_references: { file: "src/a.ts", line: 1, character: 1 },
+    lsp_symbols: { query: "Editor" },
+    lsp_hover: { symbol: "Editor" },
+    lsp_rename: { file: "src/a.ts", line: 1, character: 1, new_name: "Renamed" },
+    lsp_code_actions: { file: "src/a.ts", line: 1, character: 1 },
+    lsp_apply_code_action: { id: "ca-1" },
+    lsp_will_rename_files: { old_path: "src/a.ts", new_path: "src/b.ts" },
+    lsp_status: {}
+  };
+
+  const wrongTypeValues: Array<[string, unknown, unknown]> = [
+    ["string", 5, "ok"],
+    ["number", "5", 5],
+    ["boolean", "yes", true],
+    ["string[]", "not-array", ["a"]]
+  ];
+
+  it("schema and decoder agree on every tool and every field", () => {
+    for (const name of toolNames) {
+      const tool = toolsByName.get(name) as { inputSchema: Record<string, unknown> };
+      const schema = tool.inputSchema;
+      const baseline = validArgs[name];
+      const fields = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+
+      // Valid baseline is accepted by both.
+      expect(schemaAccepts(schema, baseline)).toBe(true);
+      expect(decodedOk(name, baseline)).toBe(true);
+
+      // Required fields: schema and decoder reject the same omissions.
+      const required = (schema.required ?? []) as string[];
+      for (const key of required) {
+        const withoutKey = { ...baseline };
+        delete withoutKey[key];
+        expect(schemaAccepts(schema, withoutKey), `schema accepts ${name} without ${key}`).toBe(false);
+        expect(decodedOk(name, withoutKey), `decoder accepts ${name} without ${key}`).toBe(false);
+      }
+
+      // Types: wrong-type field values rejected by both; right-type accepted.
+      for (const [field, spec] of Object.entries(fields)) {
+        const enumValues = spec.enum as string[] | undefined;
+        const fieldType = (spec.type === "array" ? "string[]" : spec.type) as "string" | "number" | "boolean" | "string[]";
+        const entry = wrongTypeValues.find(([type]) => type === fieldType);
+        if (!entry) continue;
+        const [_, wrongValue, rightValue] = entry;
+
+        const withWrong = { ...baseline, [field]: wrongValue };
+        expect(schemaAccepts(schema, withWrong), `schema accepts ${name}.${field}=${String(wrongValue)}`).toBe(false);
+        expect(decodedOk(name, withWrong), `decoder accepts ${name}.${field}=${String(wrongValue)}`).toBe(false);
+
+        // Right-type probe only for non-enum and non-positional-pairing fields:
+        // enums and symbol/position pairing are cross-field rules covered below.
+        if (!enumValues && field !== "symbol" && field !== "language" && field !== "line" && field !== "character" && field !== "file" && field !== "end_line" && field !== "end_character") {
+          const withRight = { ...baseline, [field]: rightValue };
+          expect(schemaAccepts(schema, withRight), `schema rejects valid ${name}.${field}`).toBe(true);
+          expect(decodedOk(name, withRight), `decoder rejects valid ${name}.${field}`).toBe(true);
+        }
+
+        // Enum values: rejected by both when invalid.
+        if (enumValues) {
+          const withInvalidEnum = { ...baseline, [field]: "not-an-enum" };
+          expect(schemaAccepts(schema, withInvalidEnum)).toBe(false);
+          expect(decodedOk(name, withInvalidEnum)).toBe(false);
+        }
+      }
+
+      // Unknown keys: rejected by both (additionalProperties: false).
+      const withUnknown = { ...baseline, bogus: 1 };
+      expect(schemaAccepts(schema, withUnknown)).toBe(false);
+      expect(decodedOk(name, withUnknown)).toBe(false);
+
+      // root: string accepted by both, wrong type rejected by both.
+      expect(schemaAccepts(schema, { ...baseline, root: "/tmp/root" })).toBe(true);
+      expect(decodedOk(name, { ...baseline, root: "/tmp/root" })).toBe(true);
+      expect(schemaAccepts(schema, { ...baseline, root: 5 })).toBe(false);
+      expect(decodedOk(name, { ...baseline, root: 5 })).toBe(false);
+    }
+  });
+
+  it("rejects negative and fractional integers on both surfaces", async () => {
+    const runtime = new RecordingRuntime();
+
+    await expectReject(runtime, toolCall("lsp_diagnostics", { file: "src/a.ts", timeoutMs: -1 }), "positive integer");
+    await expectReject(runtime, toolCall("lsp_diagnostics", { file: "src/a.ts", timeoutMs: 1.5 }), "positive integer");
+    await expectReject(runtime, toolCall("lsp_directory_diagnostics", { dir: "src", concurrency: 0 }), "positive integer");
+    await expectReject(runtime, toolCall("lsp_symbols", { query: "x", language: "" }), "non-empty string");
   });
 });

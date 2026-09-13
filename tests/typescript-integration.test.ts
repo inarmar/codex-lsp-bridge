@@ -6,7 +6,6 @@ import { createLanguageServerConfig } from "../src/adapters/language-registry.js
 import { defaultLanguageServers } from "../src/adapters/default-language-servers.js";
 import { JsonRpcLspClient } from "../src/core/json-rpc-lsp-bridge.js";
 import { LspSemanticProvider } from "../src/core/lsp-semantic-provider.js";
-import { filePathToUri } from "../src/utils/uri.js";
 
 const hasTypeScriptLanguageServer = await commandExists("typescript-language-server");
 
@@ -73,13 +72,13 @@ describe.skipIf(!hasTypeScriptLanguageServer)("TypeScript language server integr
     });
 
     try {
-      await expect(provider.diagnostics(filePathToUri(filePath))).resolves.toMatchObject({
+      await expect(provider.diagnostics(filePath)).resolves.toMatchObject({
         status: "ok",
         items: [expect.objectContaining({ severity: "error" })]
       });
 
       await fs.writeFile(filePath, "const value: string = 'ok';\n", "utf8");
-      await expect(provider.diagnostics(filePathToUri(filePath))).resolves.toMatchObject({
+      await expect(provider.diagnostics(filePath)).resolves.toMatchObject({
         status: "ok",
         items: []
       });

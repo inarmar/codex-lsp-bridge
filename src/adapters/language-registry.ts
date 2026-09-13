@@ -21,6 +21,12 @@ export interface LanguageDescriptor {
   args: string[];
   extensions: string[];
   workspaceSeedFiles: string[];
+  /**
+   * Optional relative path (inside the Workspace Root) of the Language Server
+   * Workspace; default "." — the Workspace Root itself. Enables nested
+   * frontend workspaces in monorepos.
+   */
+  workspacePath?: string;
   installHint: string;
   supportLevel: SupportLevel;
 }
@@ -35,8 +41,19 @@ export interface LanguageServerConfig {
   server: ServerProcessConfig;
   extensions: string[];
   workspaceSeedFiles: string[];
+  /** Canonical Workspace Root (containment boundary). */
+  workspaceRootPath: string;
+  /** Resolved Language Server Workspace (server cwd / LSP root / seed root). */
+  languageServerWorkspace: string;
   installHint: string;
   supportLevel: SupportLevel;
+}
+
+/** Error thrown when a language entry fails format or containment validation. */
+export class LanguageDescriptorError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
 }
 
 /**
@@ -87,11 +104,13 @@ export class LanguageRegistry {
   private add(language: string, entry: unknown): void {
     const normalized = normalizeDescriptor(language, entry);
     if (typeof normalized === "string") {
-      throw new Error(normalized);
+      throw new LanguageDescriptorError(normalized);
     }
     const collision = normalized.extensions.find((extension) => this.extensionOwners.has(extension));
     if (collision) {
-      throw new Error(`languageServers.${language}: extension "${collision}" is already used by language "${this.extensionOwners.get(collision)}"`);
+      throw new LanguageDescriptorError(
+        `languageServers.${language}: extension "${collision}" is already used by language "${this.extensionOwners.get(collision)}"`
+      );
     }
     this.descriptors.set(language, normalized);
     for (const extension of normalized.extensions) this.extensionOwners.set(extension, language);
@@ -119,8 +138,11 @@ function normalizeDescriptor(language: string, entry: unknown): LanguageDescript
   if (record.args !== undefined && !readStringArray(record.args)) {
     problems.push(`field 'args' must be an array of strings`);
   }
-  if (record.workspaceSeedFiles !== undefined && !readStringArray(record.workspaceSeedFiles)) {
-    problems.push(`field 'workspaceSeedFiles' must be an array of strings`);
+  if (record.workspaceSeedFiles !== undefined && !readRelativeStringArray(record.workspaceSeedFiles)) {
+    problems.push(`field 'workspaceSeedFiles' must be an array of relative paths (no absolute paths, no '..' escapes)`);
+  }
+  if (record.workspacePath !== undefined && !isValidRelativePath(record.workspacePath)) {
+    problems.push(`field 'workspacePath' must be a relative path inside the workspace root (no absolute paths, no '..' escapes)`);
   }
   if (record.installHint !== undefined && !readNonEmptyString(record.installHint)) {
     problems.push(`field 'installHint' must be a non-empty string`);
@@ -137,9 +159,35 @@ function normalizeDescriptor(language: string, entry: unknown): LanguageDescript
     args: readStringArray(record.args) ?? [],
     extensions: extensions!,
     workspaceSeedFiles: readStringArray(record.workspaceSeedFiles) ?? [],
+    ...(readNonEmptyString(record.workspacePath) === undefined ? {} : { workspacePath: readNonEmptyString(record.workspacePath) }),
     installHint: readNonEmptyString(record.installHint) ?? `install "${command}" and make sure it is available on PATH`,
     supportLevel: record.supportLevel === "primary" ? "primary" : "experimental"
   };
+}
+
+/**
+ * Sync validation counterpart of descriptor format rules: throws
+ * LanguageDescriptorError for absolute paths, empty values and '..' escapes.
+ */
+export function assertValidRelativePath(value: string, fieldName: string): void {
+  if (!isValidRelativePath(value)) {
+    throw new LanguageDescriptorError(`${fieldName} must be a relative path inside the workspace root (no absolute paths, no '..' escapes)`);
+  }
+}
+
+function isValidRelativePath(value: unknown): boolean {
+  if (typeof value !== "string" || value.trim().length === 0) return false;
+  if (path.isAbsolute(value)) return false;
+  if (/^[a-zA-Z]:[\\/]/.test(value)) return false;
+  if (value.includes("\0")) return false;
+  const segments = value.split(/[\\/]+/).filter(Boolean);
+  return segments.every((segment) => segment !== "..");
+}
+
+function readRelativeStringArray(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.every((item) => isValidRelativePath(item))) return undefined;
+  return [...value];
 }
 
 function readNonEmptyString(value: unknown): string | undefined {
@@ -158,29 +206,53 @@ function readStringArray(value: unknown): string[] | undefined {
   return [...value];
 }
 
+/**
+ * Builds runtime server config for a language. `rootPath` is the canonical
+ * Workspace Root. Resolves the Language Server Workspace (server cwd, LSP
+ * root, seed root) and enforces that it stays inside the Workspace Root; the
+ * bare executable is searched in the Language Server Workspace
+ * node_modules/.bin, then the Workspace Root node_modules/.bin, then PATH.
+ */
 export function createLanguageServerConfig(
   language: string,
   descriptor: LanguageDescriptor,
   rootPath: string
 ): LanguageServerConfig {
+  const workspacePath = readNonEmptyString(descriptor.workspacePath) ?? ".";
+  const languageServerWorkspace = resolveLanguageServerWorkspace(rootPath, workspacePath);
+  const command = resolveServerCommand(languageServerWorkspace, rootPath, descriptor.command);
   return {
     language,
     languageId: descriptor.languageId,
     extensions: [...descriptor.extensions],
     workspaceSeedFiles: [...descriptor.workspaceSeedFiles],
+    workspaceRootPath: rootPath,
+    languageServerWorkspace,
     installHint: descriptor.installHint,
     supportLevel: descriptor.supportLevel,
     server: {
-      command: resolveServerCommand(rootPath, descriptor.command),
+      command,
       args: [...descriptor.args],
-      cwd: path.resolve(rootPath)
+      cwd: languageServerWorkspace
     }
   };
 }
 
-function resolveServerCommand(rootPath: string, command: string): string {
-  const localCommand = path.join(rootPath, "node_modules", ".bin", command);
-  if (fs.existsSync(localCommand)) return localCommand;
-  if (process.platform === "win32" && fs.existsSync(`${localCommand}.cmd`)) return `${localCommand}.cmd`;
+export function resolveLanguageServerWorkspace(rootPath: string, workspacePath: string): string {
+  assertValidRelativePath(workspacePath, "workspacePath");
+  const resolved = path.resolve(rootPath, workspacePath === "." ? "" : workspacePath);
+  const relative = path.relative(rootPath, resolved);
+  if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+    throw new LanguageDescriptorError(`workspacePath is outside the workspace root: ${workspacePath}`);
+  }
+  return resolved;
+}
+
+function resolveServerCommand(languageServerWorkspace: string, workspaceRootPath: string, command: string): string {
+  for (const directory of [path.join(languageServerWorkspace, "node_modules", ".bin"), path.join(workspaceRootPath, "node_modules", ".bin")]) {
+    const localCommand = path.join(directory, command);
+    if (fs.existsSync(localCommand)) return localCommand;
+    if (process.platform === "win32" && fs.existsSync(`${localCommand}.cmd`)) return `${localCommand}.cmd`;
+  }
   return command;
 }

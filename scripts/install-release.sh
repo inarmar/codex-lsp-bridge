@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-v0.4.0}"
+VERSION="${1:-v0.5.0}"
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 TMP_DIR="$(mktemp -d)"

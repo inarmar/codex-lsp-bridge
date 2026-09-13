@@ -1,14 +1,201 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import type { CommandService, WorkspaceCommandService } from "../core/command-service.js";
-import { filePathToUri } from "../utils/uri.js";
+import type { BridgeRequest } from "../core/operations.js";
+import {
+  decodeApplyCodeAction,
+  decodeDefinition,
+  decodeDirectoryDiagnostics,
+  decodeFileDiagnostics,
+  decodeHover,
+  decodeListCodeActions,
+  decodeReferences,
+  decodeRename,
+  decodeStatus,
+  decodeSymbols,
+  decodeWillRenameFiles,
+  OperationParseError,
+  type BridgeOperation
+} from "../core/operations.js";
 
-type LspCommandService = CommandService | WorkspaceCommandService;
+/**
+ * MCP transport (docs/THESAURUS.md): supports only the standard MCP protocol
+ * methods (initialize, notifications/initialized, tools/list, tools/call).
+ * Tools are described by a contract table shared with the canonical operation
+ * decoders — each tool's JSON Schema and its decoding rules are derived from
+ * the same field spec, and a mandatory conformance test asserts they never
+ * diverge. The runtime only provides execute(BridgeRequest); there is no
+ * second semantic dispatch path.
+ */
 
-interface McpRuntime {
-  status?: () => unknown;
-  directoryDiagnostics?: (request: { dir: string; severity?: string; root?: string; maxFiles?: number; timeoutBudgetMs?: number; concurrency?: number }) => Promise<unknown>;
-  serviceForParams?: (params: Record<string, unknown>) => LspCommandService;
+export const serverVersion = "0.5.0";
+
+class JsonRpcError extends Error {
+  constructor(
+    readonly code: number,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+interface ToolField {
+  name: string;
+  type: "string" | "number" | "boolean" | "string[]";
+  required?: boolean;
+  description?: string;
+  enumValues?: string[];
+}
+
+interface ToolSpec {
+  name: string;
+  description: string;
+  readOnly: boolean;
+  fields: ToolField[];
+  /** Maps transport argument names to canonical operation field names. */
+  toCanonical: (args: Record<string, unknown>) => Record<string, unknown>;
+  decode: (input: Record<string, unknown>) => BridgeOperation;
+}
+
+const toolSpecs: ToolSpec[] = [
+  {
+    name: "lsp_diagnostics",
+    description: "Return compressed LSP diagnostics for one file, waiting up to timeoutMs for a fresh publishDiagnostics result.",
+    readOnly: true,
+    fields: [
+      { name: "file", type: "string", required: true, description: "File path to diagnose (relative to the workspace root or absolute)." },
+      { name: "timeoutMs", type: "number", description: "Maximum wait for fresh diagnostics in milliseconds." }
+    ],
+    toCanonical: (args) => copyByName(args, ["file", "timeoutMs"]),
+    decode: decodeFileDiagnostics
+  },
+  {
+    name: "lsp_directory_diagnostics",
+    description: "Run bounded recursive File Diagnostics over a directory: maxFiles cap, concurrency, and a timeoutBudgetMs scheduling budget (in-flight requests may finish).",
+    readOnly: true,
+    fields: [
+      { name: "dir", type: "string", required: true, description: "Directory path to scan (relative to the workspace root or absolute)." },
+      { name: "severity", type: "string", enumValues: ["error", "warning", "information", "hint"], description: "Result filter by severity." },
+      { name: "maxFiles", type: "number", description: "Maximum source files to diagnose." },
+      { name: "timeoutBudgetMs", type: "number", description: "Maximum directory diagnostics scheduling budget in milliseconds." },
+      { name: "concurrency", type: "number", description: "Maximum concurrent file diagnostics." }
+    ],
+    toCanonical: (args) => copyByName(args, ["dir", "severity", "maxFiles", "timeoutBudgetMs", "concurrency"]),
+    decode: decodeDirectoryDiagnostics
+  },
+  {
+    name: "lsp_definition",
+    description: "Find the semantic definition. Pass symbol (optionally with language) or file + line + character; exactly one mode.",
+    readOnly: true,
+    fields: [
+      { name: "symbol", type: "string" },
+      { name: "language", type: "string", description: "Language for symbol-only lookups (default from bridge config)." },
+      { name: "file", type: "string" },
+      { name: "line", type: "number" },
+      { name: "character", type: "number" }
+    ],
+    toCanonical: (args) => copyByName(args, ["symbol", "language", "file", "line", "character"]),
+    decode: decodeDefinition
+  },
+  {
+    name: "lsp_references",
+    description: "Find semantic references. Pass symbol (optionally with language) or file + line + character; exactly one mode.",
+    readOnly: true,
+    fields: [
+      { name: "symbol", type: "string" },
+      { name: "language", type: "string", description: "Language for symbol-only lookups (default from bridge config)." },
+      { name: "file", type: "string" },
+      { name: "line", type: "number" },
+      { name: "character", type: "number" }
+    ],
+    toCanonical: (args) => copyByName(args, ["symbol", "language", "file", "line", "character"]),
+    decode: decodeReferences
+  },
+  {
+    name: "lsp_symbols",
+    description: "Search workspace symbols by query.",
+    readOnly: true,
+    fields: [
+      { name: "query", type: "string", required: true },
+      { name: "language", type: "string", description: "Language for symbol-only lookups (default from bridge config)." }
+    ],
+    toCanonical: (args) => copyByName(args, ["query", "language"]),
+    decode: decodeSymbols
+  },
+  {
+    name: "lsp_hover",
+    description: "Return hover/type information. Pass symbol (optionally with language) or file + line + character; exactly one mode.",
+    readOnly: true,
+    fields: [
+      { name: "symbol", type: "string" },
+      { name: "language", type: "string", description: "Language for symbol-only lookups (default from bridge config)." },
+      { name: "file", type: "string" },
+      { name: "line", type: "number" },
+      { name: "character", type: "number" }
+    ],
+    toCanonical: (args) => copyByName(args, ["symbol", "language", "file", "line", "character"]),
+    decode: decodeHover
+  },
+  {
+    name: "lsp_rename",
+    description: "Rename a symbol across the workspace. The language server computes every occurrence and the bridge validates and applies the edit; never apply the returned edit manually. Follow up with lsp_diagnostics.",
+    readOnly: false,
+    fields: [
+      { name: "file", type: "string", required: true },
+      { name: "line", type: "number", required: true },
+      { name: "character", type: "number", required: true },
+      { name: "new_name", type: "string", required: true, description: "New name for the symbol." }
+    ],
+    toCanonical: (args) => copyByName(args, ["file", "line", "character"], { new_name: "newName" }),
+    decode: decodeRename
+  },
+  {
+    name: "lsp_code_actions",
+    description: "List code actions at a cursor position (optional selection). Returns actions with stable handles; apply one via lsp_apply_code_action.",
+    readOnly: false,
+    fields: [
+      { name: "file", type: "string", required: true },
+      { name: "line", type: "number", required: true, description: "1-based cursor line." },
+      { name: "character", type: "number", required: true, description: "1-based cursor character." },
+      { name: "end_line", type: "number", description: "1-based selection end line; requires end_character." },
+      { name: "end_character", type: "number", description: "1-based selection end character; requires end_line." },
+      { name: "only", type: "string[]", description: "Optional LSP CodeActionKind filters." }
+    ],
+    toCanonical: (args) => copyByName(args, ["file", "line", "character", "only"], { end_line: "endLine", end_character: "endCharacter" }),
+    decode: decodeListCodeActions
+  },
+  {
+    name: "lsp_apply_code_action",
+    description: "Apply a previously listed code action by its stable handle. Stale actions (source file changed since listing) are rejected.",
+    readOnly: false,
+    fields: [{ name: "id", type: "string", required: true, description: "Code Action Handle from lsp_code_actions." }],
+    toCanonical: (args) => copyByName(args, ["id"]),
+    decode: decodeApplyCodeAction
+  },
+  {
+    name: "lsp_will_rename_files",
+    description: "Request semantic import/reference updates before a physical file move, or notify the server after Codex has moved it. Codex remains responsible for the physical move.",
+    readOnly: false,
+    fields: [
+      { name: "old_path", type: "string", required: true, description: "Current file path." },
+      { name: "new_path", type: "string", required: true, description: "Destination file path." },
+      { name: "renamed", type: "boolean", description: "Set true after Codex has physically moved the file." }
+    ],
+    toCanonical: (args) => copyByName(args, ["renamed"], { old_path: "oldPath", new_path: "newPath" }),
+    decode: decodeWillRenameFiles
+  },
+  {
+    name: "lsp_status",
+    description: "Return codex-lsp-bridge status: resolved config, language server availability, Language Server Workspaces, Codex integration state, build freshness, and known runtime state.",
+    readOnly: true,
+    fields: [],
+    toCanonical: () => ({}),
+    decode: decodeStatus
+  }
+];
+
+export interface McpRuntime {
+  /** Executes a canonical BridgeRequest (root resolution is host-side). */
+  execute: (request: BridgeRequest) => Promise<unknown>;
 }
 
 interface Request {
@@ -27,225 +214,58 @@ interface JsonRpcResponse {
   };
 }
 
-class JsonRpcError extends Error {
-  constructor(
-    readonly code: number,
-    message: string
-  ) {
-    super(message);
-  }
+export function listTools(): unknown[] {
+  return toolSpecs.map((spec) => ({
+    name: spec.name,
+    description: spec.description,
+    annotations: {
+      readOnlyHint: spec.readOnly,
+      destructiveHint: false,
+      idempotentHint: spec.readOnly,
+      openWorldHint: false
+    },
+    inputSchema: buildInputSchema(spec.fields)
+  }));
 }
 
-const tools = [
-  {
-    name: "lsp_diagnostics",
-    description: "Return compressed LSP diagnostics for a file or currently opened workspace documents.",
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        uri: { type: "string", description: "Optional file:// URI to diagnose." },
-        file: { type: "string", description: "Optional file path to diagnose." },
-        root: { type: "string", description: "Optional workspace root for detached worktrees." },
-        dir: { type: "string", description: "Optional directory path to diagnose recursively." },
-        severity: { type: "string", enum: ["error", "warning", "information", "hint"] },
-        timeoutMs: { type: "number", description: "Maximum wait for file diagnostics publishDiagnostics in milliseconds." },
-        maxFiles: { type: "number", description: "Maximum source files to diagnose for directory scans." },
-        timeoutBudgetMs: { type: "number", description: "Maximum directory diagnostics wall-clock budget in milliseconds." },
-        concurrency: { type: "number", description: "Maximum concurrent file diagnostics for directory scans." }
-      },
-      additionalProperties: false
-    }
-  },
-  {
-    name: "lsp_definition",
-    description: "Find the semantic definition. Prefer file, line, and character when the occurrence is known; symbol-only lookup can be ambiguous.",
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        symbol: { type: "string" },
-        file: { type: "string" },
-        root: { type: "string", description: "Optional workspace root for detached worktrees." },
-        line: { type: "number" },
-        character: { type: "number" }
-      },
-      additionalProperties: false
-    }
-  },
-  {
-    name: "lsp_references",
-    description: "Find semantic references. Prefer file, line, and character when the occurrence is known; symbol-only lookup can be ambiguous.",
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        symbol: { type: "string" },
-        file: { type: "string" },
-        root: { type: "string", description: "Optional workspace root for detached worktrees." },
-        line: { type: "number" },
-        character: { type: "number" }
-      },
-      additionalProperties: false
-    }
-  },
-  {
-    name: "lsp_symbols",
-    description: "Search workspace symbols by query.",
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        query: { type: "string" },
-        root: { type: "string", description: "Optional workspace root for detached worktrees." }
-      },
-      required: ["query"],
-      additionalProperties: false
-    }
-  },
-  {
-    name: "lsp_hover",
-    description: "Return hover/type information. Prefer file, line, and character when the occurrence is known; symbol-only lookup can be ambiguous.",
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        symbol: { type: "string" },
-        file: { type: "string" },
-        root: { type: "string", description: "Optional workspace root for detached worktrees." },
-        line: { type: "number" },
-        character: { type: "number" }
-      },
-      additionalProperties: false
-    }
-  },
-  {
-    name: "lsp_rename",
-    description: "Rename a symbol across the workspace. The language server computes every occurrence and the bridge validates and applies the edit; never apply the returned edit manually. Follow up with lsp_diagnostics.",
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        file: { type: "string", description: "File containing the symbol occurrence." },
-        line: { type: "number", description: "1-based line of the symbol." },
-        character: { type: "number", description: "1-based character of the symbol." },
-        new_name: { type: "string", description: "New name for the symbol." },
-        root: { type: "string", description: "Optional workspace root for detached worktrees." }
-      },
-      required: ["file", "line", "character", "new_name"],
-      additionalProperties: false
-    }
-  },
-  {
-    name: "lsp_code_actions",
-    description: "List code actions or apply one selected action. The language server supplies the action and the bridge validates and applies its WorkspaceEdit; command-only actions are executed internally.",
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        file: { type: "string", description: "File at which to request code actions." },
-        line: { type: "number", description: "1-based start line; defaults to 1." },
-        character: { type: "number", description: "1-based start character; defaults to 1." },
-        end_line: { type: "number", description: "Optional 1-based end line." },
-        end_character: { type: "number", description: "Optional 1-based end character." },
-        only: { type: "array", items: { type: "string" }, description: "Optional LSP CodeActionKind filters." },
-        apply: { type: "number", description: "Optional zero-based action index to apply." },
-        root: { type: "string", description: "Optional workspace root for detached worktrees." }
-      },
-      required: ["file"],
-      additionalProperties: false
-    }
-  },
-  {
-    name: "lsp_will_rename_files",
-    description: "Request semantic import/reference updates before a physical file move, or notify the server after Codex has moved it. Codex remains responsible for the physical move.",
-    annotations: {
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        old_path: { type: "string", description: "Current file path." },
-        new_path: { type: "string", description: "Destination file path." },
-        renamed: { type: "boolean", description: "Set true after Codex has physically moved the file." },
-        root: { type: "string", description: "Optional workspace root for detached worktrees." }
-      },
-      required: ["old_path", "new_path"],
-      additionalProperties: false
-    }
-  },
-  {
-    name: "lsp_status",
-    description: "Return codex-lsp-bridge status, language server availability, Codex install state, and build freshness.",
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false
-    },
-    inputSchema: {
-      type: "object",
-      properties: {},
-      additionalProperties: false
-    }
+/** JSON Schema for a tool, derived from the same spec the decoder validates. */
+function buildInputSchema(fields: ToolField[]): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+  for (const field of fields) {
+    const schema: Record<string, unknown> =
+      field.type === "string[]"
+        ? { type: "array", items: { type: "string" } }
+        : { type: field.type };
+    if (field.enumValues) schema.enum = field.enumValues;
+    if (field.description) schema.description = field.description;
+    properties[field.name] = schema;
+    if (field.required) required.push(field.name);
   }
-];
+  if (properties.root === undefined) {
+    properties.root = { type: "string", description: "Optional workspace root for detached worktrees." };
+  }
+  return {
+    type: "object",
+    properties,
+    ...(required.length > 0 ? { required } : {}),
+    additionalProperties: false
+  };
+}
 
-export async function runStdioMcp(service: LspCommandService, runtime: McpRuntime = {}): Promise<void> {
+export async function runStdioMcp(runtime: McpRuntime): Promise<void> {
   const rl = createInterface({ input, output });
 
   for await (const line of rl) {
     if (line.trim().length === 0) continue;
-    const response = await handleJsonRpcLine(service, line, runtime);
+    const response = await handleJsonRpcLine(runtime, line);
     if (response) output.write(`${JSON.stringify(response)}\n`);
   }
 }
 
-export async function handleJsonRpcLine(
-  service: LspCommandService,
-  line: string,
-  runtime: McpRuntime = {}
-): Promise<JsonRpcResponse | undefined> {
+export async function handleJsonRpcLine(runtime: McpRuntime, line: string): Promise<JsonRpcResponse | undefined> {
   try {
-    return handleRequest(service, JSON.parse(line) as Request, runtime);
+    return handleRequest(runtime, JSON.parse(line) as Request);
   } catch {
     return {
       jsonrpc: "2.0",
@@ -258,18 +278,13 @@ export async function handleJsonRpcLine(
   }
 }
 
-export async function handleRequest(
-  service: LspCommandService,
-  request: Request,
-  runtime: McpRuntime = {}
-): Promise<JsonRpcResponse | undefined> {
+export async function handleRequest(runtime: McpRuntime, request: Request): Promise<JsonRpcResponse | undefined> {
   if (request.id === undefined) {
-    if (request.method === "notifications/initialized") return undefined;
     return undefined;
   }
 
   try {
-    const result = await dispatch(service, request, runtime);
+    const result = await dispatch(runtime, request);
     return { jsonrpc: "2.0", id: request.id, result };
   } catch (error) {
     return {
@@ -283,9 +298,7 @@ export async function handleRequest(
   }
 }
 
-export async function dispatch(service: LspCommandService, request: Request, runtime: McpRuntime = {}): Promise<unknown> {
-  const params = request.params ?? {};
-
+export async function dispatch(runtime: McpRuntime, request: Request): Promise<unknown> {
   if (request.method === "initialize") {
     return {
       protocolVersion: "2024-11-05",
@@ -294,15 +307,22 @@ export async function dispatch(service: LspCommandService, request: Request, run
       },
       serverInfo: {
         name: "codex-lsp-bridge",
-        version: "0.1.0"
+        version: serverVersion
       }
     };
   }
   if (request.method === "tools/list") {
-    return { tools };
+    return { tools: listTools() };
   }
   if (request.method === "tools/call") {
-    const result = await callTool(service, params, runtime);
+    const params = request.params ?? {};
+    const name = params.name;
+    if (typeof name !== "string") throw new JsonRpcError(-32602, "name parameter is required");
+    const rawArguments = params.arguments ?? {};
+    if (!rawArguments || typeof rawArguments !== "object" || Array.isArray(rawArguments)) {
+      throw new JsonRpcError(-32602, "arguments parameter must be an object");
+    }
+    const result = await callTool(runtime, name, rawArguments as Record<string, unknown>);
     return {
       content: [
         {
@@ -314,171 +334,76 @@ export async function dispatch(service: LspCommandService, request: Request, run
     };
   }
 
-  return dispatchLspMethod(selectService(service, params, runtime), request.method, params);
+  throw new JsonRpcError(-32601, `Unsupported method: ${request.method ?? "undefined"}`);
 }
 
-async function dispatchLspMethod(service: LspCommandService, method: string | undefined, params: Record<string, unknown>): Promise<unknown> {
-  if (method === "lsp.diagnostics") {
-    if (typeof params.dir === "string") {
-      throw new JsonRpcError(-32602, "directory diagnostics require tools/call runtime support");
+async function callTool(runtime: McpRuntime, name: string, transportArgs: Record<string, unknown>): Promise<unknown> {
+  return runtime.execute(decodeToolCall(name, transportArgs));
+}
+
+/**
+ * Decodes a tools/call invocation into a canonical BridgeRequest. Exported for
+ * the mandatory schema↔decoder conformance tests.
+ */
+export function decodeToolCall(name: string, transportArgs: Record<string, unknown>): BridgeRequest {
+  const spec = toolSpecs.find((candidate) => candidate.name === name);
+  if (!spec) throw new JsonRpcError(-32601, `Unsupported tool: ${name}`);
+
+  let canonical: Record<string, unknown>;
+  let root: string | undefined;
+  try {
+    if (transportArgs.root !== undefined) {
+      if (typeof transportArgs.root !== "string") {
+        throw new OperationParseError("root parameter must be a string");
+      }
+      root = transportArgs.root;
     }
-    const options = { timeoutMs: readOptionalPositiveNumber(params, "timeoutMs") };
-    if (typeof params.file === "string") return service.diagnostics(filePathToUri(params.file), options);
-    return service.diagnostics(typeof params.uri === "string" ? params.uri : undefined, options);
-  }
-  if (method === "lsp.definition") {
-    const position = readOptionalPosition(params);
-    if (position) return service.definitionAt(position);
-    return service.definition(readStringParam(params, "symbol"));
-  }
-  if (method === "lsp.references") {
-    const position = readOptionalPosition(params);
-    if (position) return service.referencesAt(position);
-    return service.references(readStringParam(params, "symbol"));
-  }
-  if (method === "lsp.symbols") {
-    return service.symbols(readStringParam(params, "query"));
-  }
-  if (method === "lsp.hover") {
-    const position = readOptionalPosition(params);
-    if (position) return service.hoverAt(position);
-    return service.hover(readStringParam(params, "symbol"));
+    // additionalProperties:false on the schema — reject unknown keys here so
+    // the schema and the decoder can never disagree.
+    const declaredNames = new Set([...spec.fields.map((field) => field.name), "root"]);
+    for (const key of Object.keys(transportArgs)) {
+      if (!declaredNames.has(key)) {
+        throw new OperationParseError(`${spec.name}: unexpected parameter '${key}'`);
+      }
+    }
+    const operationArgs: Record<string, unknown> = { ...transportArgs };
+    delete operationArgs.root;
+    canonical = spec.toCanonical(operationArgs);
+  } catch (error) {
+    throw toProtocolError(error);
   }
 
-  throw new JsonRpcError(-32601, `Unsupported method: ${method ?? "undefined"}`);
+  let operation: BridgeOperation;
+  try {
+    operation = spec.decode(canonical);
+  } catch (error) {
+    throw toProtocolError(error);
+  }
+
+  return { ...(root !== undefined ? { root } : {}), operation };
 }
 
-async function callTool(service: LspCommandService, params: Record<string, unknown>, runtime: McpRuntime): Promise<unknown> {
-  const name = readStringParam(params, "name");
-  const argumentsValue = params.arguments ?? {};
-  if (!argumentsValue || typeof argumentsValue !== "object" || Array.isArray(argumentsValue)) {
-    throw new JsonRpcError(-32602, "arguments parameter must be an object");
-  }
-  const args = argumentsValue as Record<string, unknown>;
-
-  if (name === "lsp_diagnostics" && typeof args.dir === "string") {
-    if (!runtime.directoryDiagnostics) throw new JsonRpcError(-32602, "directory diagnostics are unavailable");
-    return runtime.directoryDiagnostics({
-      dir: args.dir,
-      severity: typeof args.severity === "string" ? args.severity : undefined,
-      root: typeof args.root === "string" ? args.root : undefined,
-      maxFiles: typeof args.maxFiles === "number" ? args.maxFiles : undefined,
-      timeoutBudgetMs: typeof args.timeoutBudgetMs === "number" ? args.timeoutBudgetMs : undefined,
-      concurrency: typeof args.concurrency === "number" ? args.concurrency : undefined
-    });
-  }
-  if (name === "lsp_diagnostics" && args.timeoutBudgetMs !== undefined) {
-    throw new JsonRpcError(-32602, "timeoutBudgetMs is only valid for directory diagnostics; use timeoutMs for file diagnostics");
-  }
-  const scopedService = selectService(service, args, runtime);
-  if (name === "lsp_diagnostics") return dispatchLspMethod(scopedService, "lsp.diagnostics", args);
-  if (name === "lsp_definition") return dispatchLspMethod(scopedService, "lsp.definition", args);
-  if (name === "lsp_references") return dispatchLspMethod(scopedService, "lsp.references", args);
-  if (name === "lsp_symbols") return dispatchLspMethod(scopedService, "lsp.symbols", args);
-  if (name === "lsp_hover") return dispatchLspMethod(scopedService, "lsp.hover", args);
-  if (name === "lsp_rename") {
-    return scopedService.rename(readRequiredPosition(args), readStringParam(args, "new_name"));
-  }
-  if (name === "lsp_code_actions") {
-    const file = readStringParam(args, "file");
-    return scopedService.codeActions(file, readCodeActionRange(args), readOnlyKinds(args), readOptionalNonNegativeInteger(args, "apply"));
-  }
-  if (name === "lsp_will_rename_files") {
-    return scopedService.willRenameFiles(
-      readStringParam(args, "old_path"),
-      readStringParam(args, "new_path"),
-      readOptionalBoolean(args, "renamed", false)
-    );
-  }
-  if (name === "lsp_status") return runtime.status ? runtime.status() : { status: "unavailable" };
-
-  throw new JsonRpcError(-32601, `Unsupported tool: ${name}`);
+function toProtocolError(error: unknown): JsonRpcError {
+  if (error instanceof OperationParseError) return new JsonRpcError(-32602, error.message);
+  return new JsonRpcError(-32602, error instanceof Error ? error.message : "Invalid parameters");
 }
 
-function selectService(service: LspCommandService, params: Record<string, unknown>, runtime: McpRuntime): LspCommandService {
-  return runtime.serviceForParams && typeof params.root === "string" ? runtime.serviceForParams(params) : service;
-}
-
-function readStringParam(params: Record<string, unknown>, key: string): string {
-  const value = params[key];
-  if (typeof value !== "string") throw new JsonRpcError(-32602, `${key} parameter is required`);
-  return value;
-}
-
-function readOptionalPositiveNumber(params: Record<string, unknown>, key: string): number | undefined {
-  const value = params[key];
-  if (value === undefined) return undefined;
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    throw new JsonRpcError(-32602, `${key} parameter must be a positive number`);
+/** Copies fields by (transport name → canonical name) mapping. */
+function copyByName(
+  args: Record<string, unknown>,
+  names: string[],
+  aliases: Record<string, string> = {}
+): Record<string, unknown> {
+  const canonical: Record<string, unknown> = {};
+  for (const name of names) {
+    if (args[name] !== undefined) {
+      canonical[aliases[name] ?? name] = args[name];
+    }
   }
-  return value;
-}
-
-function readOptionalNonNegativeInteger(params: Record<string, unknown>, key: string): number | undefined {
-  const value = params[key];
-  if (value === undefined) return undefined;
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new JsonRpcError(-32602, `${key} parameter must be a non-negative integer`);
+  for (const [transportName, canonicalName] of Object.entries(aliases)) {
+    if (args[transportName] !== undefined) {
+      canonical[canonicalName] = args[transportName];
+    }
   }
-  return value;
-}
-
-function readOnlyKinds(params: Record<string, unknown>): string[] | undefined {
-  const value = params.only;
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    throw new JsonRpcError(-32602, "only parameter must be an array of strings");
-  }
-  return value as string[];
-}
-
-function readOptionalBoolean(params: Record<string, unknown>, key: string, defaultValue: boolean): boolean {
-  const value = params[key];
-  if (value === undefined) return defaultValue;
-  if (typeof value !== "boolean") throw new JsonRpcError(-32602, `${key} parameter must be a boolean`);
-  return value;
-}
-
-function readCodeActionRange(params: Record<string, unknown>): { start: { line: number; character: number }; end: { line: number; character: number } } {
-  const line = readPositiveIntegerOrDefault(params, "line", 1);
-  const character = readPositiveIntegerOrDefault(params, "character", 1);
-  const endLine = readPositiveIntegerOrDefault(params, "end_line", line);
-  const endCharacter = readPositiveIntegerOrDefault(params, "end_character", character);
-
-  return {
-    start: { line, character },
-    end: { line: endLine, character: endCharacter }
-  };
-}
-
-function readPositiveIntegerOrDefault(params: Record<string, unknown>, key: string, defaultValue: number): number {
-  const value = params[key];
-  if (value === undefined) return defaultValue;
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    throw new JsonRpcError(-32602, `${key} parameter must be a positive integer`);
-  }
-  return value;
-}
-
-function readOptionalPosition(params: Record<string, unknown>): { file: string; line: number; character: number } | undefined {
-  if (params.file === undefined && params.line === undefined && params.character === undefined) return undefined;
-  if (typeof params.file !== "string") throw new JsonRpcError(-32602, "file parameter is required");
-  if (typeof params.line !== "number") throw new JsonRpcError(-32602, "line parameter is required");
-  if (typeof params.character !== "number") throw new JsonRpcError(-32602, "character parameter is required");
-  return {
-    file: params.file,
-    line: params.line,
-    character: params.character
-  };
-}
-
-function readRequiredPosition(params: Record<string, unknown>): { file: string; line: number; character: number } {
-  if (typeof params.file !== "string") throw new JsonRpcError(-32602, "file parameter is required");
-  if (typeof params.line !== "number") throw new JsonRpcError(-32602, "line parameter is required");
-  if (typeof params.character !== "number") throw new JsonRpcError(-32602, "character parameter is required");
-  return {
-    file: params.file,
-    line: params.line,
-    character: params.character
-  };
+  return canonical;
 }

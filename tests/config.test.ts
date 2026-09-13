@@ -45,7 +45,30 @@ describe("config", () => {
     process.env.CODEX_HOME = path.join(homePath, ".codex");
 
     expect(loadConfig(rootPath)).toMatchObject({
-      diagnosticsTimeoutMs: 15000
+      diagnosticsTimeoutMs: 15000,
+      directoryDiagnostics: { maxFiles: 50, timeoutBudgetMs: 15000, concurrency: 2 }
+    });
+  });
+
+  it("merges directory diagnostics defaults across config layers", async () => {
+    rootPath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-root-"));
+    homePath = await fs.mkdtemp(path.join(os.tmpdir(), "codex-lsp-config-home-"));
+    process.env.CODEX_HOME = path.join(homePath, ".codex");
+    await fs.mkdir(process.env.CODEX_HOME, { recursive: true });
+    await fs.writeFile(
+      path.join(process.env.CODEX_HOME, configFile),
+      JSON.stringify({ directoryDiagnostics: { maxFiles: 5, concurrency: 4 } })
+    );
+    await fs.mkdir(path.join(rootPath, ".codex"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootPath, ".codex", configFile),
+      JSON.stringify({ directoryDiagnostics: { timeoutBudgetMs: 300, maxFiles: 0 } })
+    );
+
+    expect(loadConfig(rootPath).directoryDiagnostics).toEqual({
+      maxFiles: 5,
+      timeoutBudgetMs: 300,
+      concurrency: 4
     });
   });
 

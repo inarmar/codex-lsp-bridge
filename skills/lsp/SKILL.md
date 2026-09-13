@@ -32,9 +32,13 @@ Do not replace symbol references manually when `lsp_rename` is available.
 
 For quick fixes and refactors:
 
-1. Call `lsp_code_actions` for the narrowest relevant file and range.
-2. Select the language-server-provided action that matches the intended change.
-3. Let the bridge resolve and apply the action.
+1. Call `lsp_code_actions` at the cursor position (`file` + `line` + `character`),
+   with an optional selection (`end_line`/`end_character`) and optional `only` filters.
+2. Pick the matching action from the returned list; each item carries a stable
+   `id` (handle).
+3. Apply it with `lsp_apply_code_action` using that `id`. The bridge
+   re-checks the source file (a changed file rejects the action as stale),
+   resolves the action if needed, and applies the `WorkspaceEdit`.
 4. Run `lsp_diagnostics` on affected files.
 
 Prefer language-server code actions over manually reproducing the same refactor or fix.
@@ -74,7 +78,10 @@ Codex must not bypass this pipeline by applying LSP edits manually.
 
 ## Diagnostics
 
-- Prefer file diagnostics over broad directory scans.
+- `lsp_diagnostics` is file-scoped (`file` is required); the no-target mode was
+  removed.
+- Use `lsp_directory_diagnostics` for bounded directory scans; `lsp_diagnostics`
+  with directory arguments is not supported.
 - During code review, audit, or investigation, run `lsp_diagnostics` for changed supported files or the smallest representative set before final findings.
 - For large TypeScript workspaces, use file diagnostics `timeoutMs` when needed.
 - For directory diagnostics, bound `maxFiles`, `timeoutBudgetMs`, and `concurrency`.

@@ -24,12 +24,8 @@ try {
   const usage = run(binPath, ["--help"], tempRoot);
   assert(usage.stdout.includes("Usage:"), "installed package --help did not print usage");
 
-  const help = run(binPath, ["doctor", "--root", packageRoot], tempRoot);
-  assert(help.stdout.includes('"distExists": true'), "installed package doctor did not report distExists true");
-
-  const installBin = path.join(tempRoot, "node_modules", ".bin", process.platform === "win32" ? "codex-lsp-bridge-install.cmd" : "codex-lsp-bridge-install");
-  const codexHome = path.join(tempRoot, "codex-home");
-  run(installBin, ["--dry-run"], tempRoot, { CODEX_HOME: codexHome });
+  const status = run(binPath, ["status", "--root", packageRoot], tempRoot);
+  assert(status.stdout.includes('"distExists": true'), "installed package status did not report distExists true");
 } finally {
   fs.rmSync(tarballPath, { force: true });
   fs.rmSync(tempRoot, { recursive: true, force: true });

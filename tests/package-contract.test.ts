@@ -18,10 +18,8 @@ describe("package contract", () => {
       scripts: Record<string, string>;
     }>("package.json");
 
-    expect(pkg.bin).toMatchObject({
-      "codex-lsp-bridge": "dist/index.js",
-      "codex-lsp-bridge-install": "scripts/install-codex.mjs",
-      "codex-lsp-bridge-uninstall": "scripts/uninstall-codex.mjs"
+    expect(pkg.bin).toEqual({
+      "codex-lsp-bridge": "dist/index.js"
     });
     expect(pkg.files).toEqual(
       expect.arrayContaining([
@@ -31,8 +29,8 @@ describe("package contract", () => {
         "dist/transport",
         "dist/utils",
         "scripts/codex-lsp-post-tool-use.mjs",
-        "scripts/install-codex.mjs",
-        "scripts/uninstall-codex.mjs",
+        "scripts/smoke-package.mjs",
+        "scripts/verify-package.mjs",
         ".codex-plugin/plugin.json",
         ".mcp.json",
         "hooks/hooks.json",
@@ -45,11 +43,13 @@ describe("package contract", () => {
         "SECURITY.md"
       ])
     );
+    expect(pkg.files).not.toContain("scripts/install-codex.mjs");
+    expect(pkg.files).not.toContain("scripts/uninstall-codex.mjs");
+    expect(pkg.files).not.toContain("scripts/smoke-install.mjs");
     expect(pkg.scripts).toMatchObject({
       "verify:package": "node scripts/verify-package.mjs",
-      "smoke:install": "node scripts/smoke-install.mjs",
       "smoke:package": "node scripts/smoke-package.mjs",
-      "ci:verify": "npm run type-check && npm test && npm run build && npm run verify:package && npm run smoke:install && npm run smoke:package"
+      "ci:verify": "npm run type-check && npm test && npm run build && npm run verify:package && npm run smoke:package"
     });
   });
 

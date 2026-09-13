@@ -14,10 +14,7 @@ const requiredPackageFiles = [
   "dist/transport/mcp.js",
   "dist/utils/uri.js",
   "scripts/codex-lsp-post-tool-use.mjs",
-  "scripts/install-codex.mjs",
-  "scripts/smoke-install.mjs",
   "scripts/smoke-package.mjs",
-  "scripts/uninstall-codex.mjs",
   "scripts/verify-package.mjs",
   ".codex-plugin/plugin.json",
   ".mcp.json",
@@ -39,10 +36,7 @@ const requiredLocalFiles = [
   "skills/lsp/SKILL.md",
   "docs/RELEASE.md",
   "docs/MARKETPLACE.md",
-  "scripts/install-codex.mjs",
-  "scripts/uninstall-codex.mjs",
   "scripts/codex-lsp-post-tool-use.mjs",
-  "scripts/smoke-install.mjs",
   "scripts/smoke-package.mjs",
   "scripts/verify-package.mjs"
 ];
